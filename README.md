@@ -20,33 +20,33 @@ package main
 
 var VERSION = "0.5.0" //set with ldflags
 
-func main() {
-	u := upgrade.New(upgrade.Config{
-		Version: VERSION,
-		URL: "https://example.com/build/prog.{{ .Version }}.tar"
-	})
-
-	if upgraded, err := u.Upgrade(); err != nil {
-		log.Print(err) //update process failed
-	} else if !upgraded {
-		//no updates found
-	} else {
-		//updated succeeded, your binary has been swapped, you can now:
-		//1. continue execution, and the new version will be used on next run
-		//2. os.Exit(0) and force user to restart
-		//3. os.Exit(1) and allow the init system perform a restart
-	}
-
+//to make your cli tool auto-upgradable:
+//  change your 'main' into a 'prog'
+func prog() {
 	log.Printf("Running version %s...", VERSION)
 	select {}
 }
+
+//the upgrade pkg will use the main process for the upgrading the
+//binary, then fork and run 'prog' in a child process. when the binary
+//changes, upgrade will ask 'prog' to close and when it does, it will
+//spawn a new version
+func main() {
+	upgrade.Run(prog, upgrade.Config{
+		Version: VERSION,
+		URL: "https://example.com/build/prog.{{ .Version }}.tar",
+	})
+}
 ```
 
-When doing an `Upgrade()`, the `Version` will be parsed and each of the numerical sections will be parsed. One at a time, from right to left, each will be incremented and the new URL will requested. So, in the example above, `0.5.1` will be tried, then `0.6.0`, then `1.5.0`. Numerical semantic versions aren't required, you could also simply have `v1`, which then would be incremented to `v2`.
+When performing an upgrade, the `Version` will be parsed and each of the numerical sections will be parsed. One at a time, from right to left, each will be incremented and the new URL will requested. So, in the example above, `0.5.1` will be tried, then `0.6.0`, then `1.5.0`. Numerical semantic versions aren't required, you could also simply have `v1`, which then would be incremented to `v2`.
+
+**Note** this project is not a replacement for your init systems.
 
 ### Known issues
 
 * Your new binary panics before the upgrade process and you're stuck with a broken version. This could possibly be resolved with `recover`.
+* If for some reason the OS does not support a feature. `prog` will still run though upgrades will not occur.
 
 ### Todo
 
