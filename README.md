@@ -1,56 +1,87 @@
-
-:warning: This project is currently documentation only. There are [other](https://github.com/sanbornm/go-selfupdate) [projects](https://github.com/inconshreveable/go-update) for upgrading Go programs though they seem to place too many restrictions on how and when upgrades are performed.
-
----
-
 # go-upgrade
 
-Upgrade the binaries of running Go (Golang) programs
+Self-upgrading binaries in Go (Golang)
+
+:warning: This is beta software
 
 ### Install
 
 ```
-go get ...
+go get github.com/jpillora/go-upgrade
 ```
 
-### Usage
+### Quick Usage
 
 ``` go
 package main
 
-var VERSION = "0.5.0" //set with ldflags
+import (
+	"log"
+	"os"
+	"time"
 
-//to make your cli tool auto-upgradable:
-//  change your 'main' into a 'prog'
+	"github.com/jpillora/go-upgrade"
+)
+
+var VERSION = "0.0.0" //set with ldflags
+
+//change your 'main' into a 'prog'
 func prog() {
 	log.Printf("Running version %s...", VERSION)
 	select {}
 }
 
-//the upgrade pkg will use the main process for the upgrading the
-//binary, then fork and run 'prog' in a child process. when the binary
-//changes, upgrade will ask 'prog' to close and when it does, it will
-//spawn a new version
+//then create another 'main' which runs the upgrades
 func main() {
-	upgrade.Run(prog, upgrade.Config{
+	upgrade.Run(upgrade.Config{
+		Program: prog,
 		Version: VERSION,
-		URL: "https://example.com/build/prog.{{ .Version }}.tar",
+		Fetcher: upgrade.BasicFetcher(
+			"http://localhost:3000/myapp_{{.Version}}",
+		),
+		FetchInterval: 2 * time.Hour,
+		Signal:        os.Interrupt,
 	})
 }
 ```
 
-When performing an upgrade, the `Version` will be parsed and each of the numerical sections will be parsed. One at a time, from right to left, each will be incremented and the new URL will requested. So, in the example above, `0.5.1` will be tried, then `0.6.0`, then `1.5.0`. Numerical semantic versions aren't required, you could also simply have `v1`, which then would be incremented to `v2`.
+### How it works
 
-**Note** this project is not a replacement for your init systems.
+* `go-upgrade` uses the main process to check for and install upgrades and a child process to run `Program`
+* If the current binary cannot be found or written to, `go-upgrade` will be disabled and `Program` will run in the main process
+* On load `Program` will be run in a child process
+* All standard pipes are connected to the child process
+* All signals received are forwarded through to the child process
+* Every `CheckInterval` the fetcher's `Fetch` method is called with the current version
+* The `BasicFetcher` requires a URL with a version placeholder. On `Fetch`, the current version will be incremented and result URL will be requested (raw bytes, `.tar.gz`, `.gz`, `.zip` binary releases are supported), if successful, the binary is returned.
+* When the binary is returned, its version is tested and checked against the current version, if it differs the upgrade is considered successful and the desired `Signal` will be sent to the child process.
+* When the child process exits, the main process will exit with the same code (except for upgrade restarts).
+* Upgrade restarts are performed once after an upgrade - any subsequence exits will also cause the main process to exit - **so `go-upgrade` is not a process manager**.
 
-### Known issues
 
-* Your new binary panics before the upgrade process and you're stuck with a broken version. This could possibly be resolved with `recover`.
-* If for some reason the OS does not support a feature. `prog` will still run though upgrades will not occur.
+### Fetchers
+
+#### Basic
+
+**Performs a simple web request at the desired URL**
+
+When performing the version increment step, the current version will be parsed and each of the numerical sections will be grouped. One at a time, from right to left, each will be incremented and the new URL will requested. So, in the example above, `0.5.1` will be tried, then `0.6.0`, then `1.5.0`. Numerical semantic versions aren't required, you could also simply have `v1`, which then would be incremented to `v2`.
+
+#### Github
+
+**Uses Github releases to locate and download the newest version**
+
+*TODO*
+
+### Alternatives
+
+* https://github.com/sanbornm/go-selfupdate
+* https://github.com/inconshreveable/go-update
 
 ### Todo
 
 * Delta updates with https://github.com/kr/binarydist
+* Signed binaries (in the meantime, use HTTPS where possible)
 
 #### MIT License
 
