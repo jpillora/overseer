@@ -2,13 +2,13 @@
 
 #NOTE: DONT CTRL+C OR CLEANUP WONT OCCUR
 
-#upgrade server (any http server)
+#binary hosting server (any file server)
 # go get github.com/jpillora/serve
 serve &
 
 #initial build
-echo "BUILDING APP 0.3.0"
-go build -ldflags "-X main.VERSION 0.3.0" -o myapp
+echo "BUILDING APP: A"
+go build -ldflags "-X main.FOO=A" -o myapp
 
 #run!
 echo "RUNNING APP"
@@ -16,13 +16,13 @@ echo "RUNNING APP"
 
 sleep 3
 
-echo "BUILDING APP 0.3.1"
-go build -ldflags "-X main.VERSION 0.3.1" -o myapp.0.3.1
+echo "BUILDING APP: B"
+go build -ldflags "-X main.FOO=B" -o newmyapp
 
 sleep 4
 
-echo "BUILDING APP 0.4.0"
-go build -ldflags "-X main.VERSION 0.4.0" -o myapp.0.4.0
+echo "BUILDING APP: C"
+go build -ldflags "-X main.FOO=C" -o newmyapp
 
 sleep 4
 

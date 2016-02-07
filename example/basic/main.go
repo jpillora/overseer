@@ -1,33 +1,40 @@
 package main
 
 import (
+	"fmt"
 	"log"
-	"os"
+	"net/http"
 	"time"
 
 	"github.com/jpillora/go-upgrade"
+	"github.com/jpillora/go-upgrade/fetcher"
 )
 
-var VERSION = "0.0.0" //set with ldflags
+var FOO = "" //set manually or with with ldflags
 
-//change your 'main' into a 'prog'
-func prog() {
-	log.Printf("Running version %s...", VERSION)
-	select {}
+//convert your 'main()' into a 'prog(state)'
+func prog(state upgrade.State) {
+	log.Printf("app (%s) listening...", state.ID)
+	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Foo", FOO)
+		w.Header().Set("Header-Time", time.Now().String())
+		w.WriteHeader(200)
+		time.Sleep(30 * time.Second)
+		fmt.Fprintf(w, "Body-Time: %s (Foo: %s)", time.Now(), FOO)
+	}))
+	http.Serve(state.Listener, nil)
 }
 
 //then create another 'main' which runs the upgrades
 func main() {
 	upgrade.Run(upgrade.Config{
 		Program: prog,
-		Version: VERSION,
-		Fetcher: upgrade.BasicFetcher(
-			"http://localhost:3000/myapp_{{.Version}}",
-		),
-		FetchInterval: 2 * time.Second,
-		Signal:        os.Interrupt,
-		//display logs of actions
-		Logging: true,
+		Address: "0.0.0.0:3000",
+		Fetcher: &fetcher.HTTP{
+			URL:      "http://localhost:4000/myapp2",
+			Interval: 5 * time.Second,
+		},
+		Logging: true, //display log of go-upgrade actions
 	})
 }
 
