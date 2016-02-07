@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -38,6 +39,8 @@ type State struct {
 type slave struct {
 	Config
 	listeners []*upListener
+	ppid      int
+	pproc     *os.Process
 	state     State
 }
 
@@ -45,12 +48,30 @@ func (sp *slave) run() {
 	sp.state.Enabled = true
 	sp.state.ID = os.Getenv(envBinID)
 	sp.state.StartedAt = time.Now()
+	sp.watchParent()
 	sp.initFileDescriptors()
-	//find parent
-
+	sp.watchSignal()
 	//run program with state
 	sp.logf("start program")
 	sp.Config.Program(sp.state)
+}
+
+func (sp *slave) watchParent() {
+	sp.ppid = os.Getppid()
+	proc, err := os.FindProcess(sp.ppid)
+	if err != nil {
+		fatalf("parent process %s", err)
+	}
+	sp.pproc = proc
+	go func() {
+		for {
+			//sending signal 0 should not error as long as the process is alive
+			if err := sp.pproc.Signal(syscall.Signal(0)); err != nil {
+				os.Exit(1)
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}()
 }
 
 func (sp *slave) initFileDescriptors() {
@@ -67,7 +88,7 @@ func (sp *slave) initFileDescriptors() {
 		if err != nil {
 			fatalf("failed to inherit file descriptor: %d", i)
 		}
-		u := &upListener{Listener: l}
+		u := newUpListener(l)
 		sp.listeners[i] = u
 		sp.state.Listeners[i] = u
 	}
@@ -81,13 +102,18 @@ func (sp *slave) watchSignal() {
 	signal.Notify(signals, sp.Config.Signal)
 	go func() {
 		<-signals
-		//do graceful shutdown
-
-		//stop listening
-
+		signal.Stop(signals)
+		sp.logf("graceful shutdown requested")
+		//master wants to restart,
+		//perform graceful shutdown:
+		for _, l := range sp.listeners {
+			l.release(sp.Config.TerminateTimeout)
+		}
+		sp.logf("released")
 		//signal released fds
-
-		//listeners should be waiting on connections and close
+		sp.pproc.Signal(syscall.SIGUSR1)
+		sp.logf("notify USR1")
+		//listeners should be waiting on connections to close...
 	}()
 }
 

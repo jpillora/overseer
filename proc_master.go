@@ -42,6 +42,7 @@ func (mp *master) run() {
 	mp.readBinary()
 	mp.setupSignalling()
 	mp.retreiveFileDescriptors()
+	mp.fetch()
 	go mp.fetchLoop()
 	mp.forkLoop()
 }
@@ -85,7 +86,7 @@ func (mp *master) readBinary() {
 		}
 		if err != nil {
 			if mp.Config.Optional {
-				log.Print(err)
+				mp.logf("%s, disabling go-upgrade. ", err)
 			} else {
 				fatalf("%s", err)
 			}
@@ -119,7 +120,10 @@ func (mp *master) setupSignalling() {
 
 			if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
 				mp.logf("proxy signal (%s)", s)
-				mp.slaveCmd.Process.Signal(s)
+				if err := mp.slaveCmd.Process.Signal(s); err != nil {
+					mp.logf("proxy signal failed (%s)", err)
+					os.Exit(1)
+				}
 			} else if s == syscall.SIGINT {
 				mp.logf("interupt with no slave")
 				os.Exit(1)
@@ -153,9 +157,18 @@ func (mp *master) retreiveFileDescriptors() {
 }
 
 func (mp *master) fetchLoop() {
+	minDelay := time.Second
+	time.Sleep(minDelay)
 	for {
+		t0 := time.Now()
 		mp.fetch()
-		time.Sleep(time.Second) //fetches should be throttled by the fetcher!
+		diff := time.Now().Sub(t0)
+		if diff < minDelay {
+			delay := minDelay - diff
+			//ensures at least minDelay
+			//should be throttled by the fetcher!
+			time.Sleep(delay)
+		}
 	}
 }
 
@@ -224,7 +237,7 @@ func (mp *master) fetch() {
 	//binary successfully replaced, perform graceful restart
 	mp.restarting = true
 	mp.signalledAt = time.Now()
-	mp.signals <- syscall.SIGTERM //ask nicely to terminate
+	mp.signals <- mp.Config.Signal //ask nicely to terminate
 	select {
 	case <-mp.restarted:
 		//success
@@ -296,10 +309,10 @@ func (mp *master) fork() {
 		//proxy exit with same code
 		os.Exit(code)
 	case <-mp.descriptorsReleased:
-		log.Printf("descriptors released")
 		//if descriptors are released, the program
-		//is yielding control of the socket and
-		//should restart
+		//has yielded control of its sockets and
+		//a new instance should be started to pick
+		//them up
 	}
 }
 
