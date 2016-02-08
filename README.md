@@ -85,12 +85,12 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### Architecture overview
 
-*. `go-upgrade` uses the main process to check for and install upgrades and a child process to run `Program`
-*. All child process pipes are connected back to the main process
-*. All signals received on the main process are forwarded through to the child process
-*. The provided `fetcher.Interface` will be used to `Fetch()` the latest build of the binary
-*. The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `go-upgrade`.
-*. Once a binary is received, it is run with a simple echo token to confirm it is a `go-upgrade` binary.
+* `go-upgrade` uses the main process to check for and install upgrades and a child process to run `Program`
+* All child process pipes are connected back to the main process
+* All signals received on the main process are forwarded through to the child process
+* The provided `fetcher.Interface` will be used to `Fetch()` the latest build of the binary
+* The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `go-upgrade`.
+* Once a binary is received, it is run with a simple echo token to confirm it is a `go-upgrade` binary.
 * Except for scheduled upgrades, the child process exiting will cause the main process to exit with the same code. So, **`go-upgrade` is not a process manager**.
 
 ### Alternatives
