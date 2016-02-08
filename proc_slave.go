@@ -103,17 +103,15 @@ func (sp *slave) watchSignal() {
 	go func() {
 		<-signals
 		signal.Stop(signals)
-		sp.logf("graceful shutdown requested")
 		//master wants to restart,
 		//perform graceful shutdown:
 		for _, l := range sp.listeners {
 			l.release(sp.Config.TerminateTimeout)
 		}
-		sp.logf("released")
 		//signal released fds
-		sp.masterProc.Signal(syscall.SIGUSR1)
-		sp.logf("notify USR1")
+		sp.masterProc.Signal(SIGUSR1)
 		//listeners should be waiting on connections to close...
+		sp.logf("graceful shutdown")
 	}()
 }
 

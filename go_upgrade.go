@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"syscall"
+	"runtime"
 	"time"
 
 	"github.com/jpillora/go-upgrade/fetcher"
@@ -71,7 +71,7 @@ func Run(c Config) {
 		c.Addresses = []string{c.Address}
 	}
 	if c.Signal == nil {
-		c.Signal = syscall.SIGTERM
+		c.Signal = SIGTERM
 	}
 	if c.TerminateTimeout == 0 {
 		c.TerminateTimeout = 30 * time.Second
@@ -81,6 +81,14 @@ func Run(c Config) {
 	}
 	if c.Fetcher == nil {
 		fatalf("upgrade.Config.Fetcher required")
+	}
+	//os not supported
+	if !supported {
+		if !c.Optional {
+			fatalf("os (%s) not supported", runtime.GOOS)
+		}
+		c.Program(DisabledState)
+		return
 	}
 	//run either in master or slave mode
 	if os.Getenv(envIsSlave) == "1" {

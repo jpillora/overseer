@@ -42,7 +42,15 @@ type master struct {
 }
 
 func (mp *master) run() {
-	mp.readBinary()
+	if err := mp.checkBinary(); err != nil {
+		if !mp.Config.Optional {
+			fatalf("%s", err)
+		}
+		//run program directly
+		mp.logf("%s, disabling go-upgrade.", err)
+		mp.Program(DisabledState)
+		return
+	}
 	mp.setupSignalling()
 	mp.retreiveFileDescriptors()
 	mp.fetch()
@@ -50,53 +58,39 @@ func (mp *master) run() {
 	mp.forkLoop()
 }
 
-func (mp *master) readBinary() {
+func (mp *master) checkBinary() error {
 	//get path to binary and confirm its writable
 	binPath, err := osext.Executable()
-	binFound := false
-	binWritable := false
 	if err != nil {
-		mp.logf("failed to find binary path")
-	} else if f, err := os.OpenFile(binPath, os.O_RDWR, os.ModePerm); err == nil {
-		if info, err := f.Stat(); err == nil && info.Size() > 0 {
-			mp.binPath = binPath
-			binFound = true
-			//initial hash of file
-			hash := sha1.New()
-			io.Copy(hash, f)
-			mp.binHash = hash.Sum(nil)
-			//copy permissions
-			mp.binPerms = info.Mode()
-			//test write
-			sample := make([]byte, 1)
-			if n, err := f.ReadAt(sample, 0); err == nil && n == 1 {
-				//read 1 byte, now write
-				if n, err = f.WriteAt(sample, 0); err == nil && n == 1 {
-					//write success
-					binWritable = true
-				}
-			}
-		}
-		f.Close()
+		return fmt.Errorf("failed to find binary path (%s)", err)
 	}
-	//is the program? or failed to find the writable binary path?
-	if !binWritable {
-		var err error
-		if !binFound {
-			err = fmt.Errorf("binary path not found: %s", binPath)
-		} else if !binWritable {
-			err = fmt.Errorf("binary path not writable: %s", binPath)
-		}
-		if err != nil {
-			if mp.Config.Optional {
-				mp.logf("%s, disabling go-upgrade. ", err)
-			} else {
-				fatalf("%s", err)
-			}
-		}
-		mp.Program(DisabledState)
-		return
+	mp.binPath = binPath
+	if info, err := os.Stat(binPath); err != nil {
+		return fmt.Errorf("failed to stat binary (%s)", err)
+	} else if info.Size() == 0 {
+		return fmt.Errorf("binary file is empty")
+	} else {
+		//copy permissions
+		mp.binPerms = info.Mode()
 	}
+	f, err := os.Open(binPath)
+	if err != nil {
+		return fmt.Errorf("cannot read binary (%s)", err)
+	}
+	//initial hash of file
+	hash := sha1.New()
+	io.Copy(hash, f)
+	mp.binHash = hash.Sum(nil)
+	f.Close()
+	//tmp path
+	tmpPath := mp.binPath + ".tmp"
+	if err := os.Rename(mp.binPath, tmpPath); err != nil {
+		return fmt.Errorf("cannot move binary (%s)", err)
+	}
+	if err := os.Rename(tmpPath, mp.binPath); err != nil {
+		return fmt.Errorf("cannot move binary back (%s)", err)
+	}
+	return nil
 }
 
 func (mp *master) setupSignalling() {
@@ -120,7 +114,7 @@ func (mp *master) handleSignal(s os.Signal) {
 	//**during a restart** a SIGUSR1 signals
 	//to the master process that, the file
 	//descriptors have been released
-	if mp.awaitingUSR1 && s == syscall.SIGUSR1 {
+	if mp.awaitingUSR1 && s == SIGUSR1 {
 		mp.awaitingUSR1 = false
 		mp.descriptorsReleased <- true
 	} else
@@ -134,7 +128,7 @@ func (mp *master) handleSignal(s os.Signal) {
 		}
 	} else
 	//otherwise if not running, kill on CTRL+c
-	if s == syscall.SIGINT {
+	if s == os.Interrupt {
 		mp.logf("interupt with no slave")
 		os.Exit(1)
 	} else {
@@ -250,9 +244,9 @@ func (mp *master) fetch() {
 		mp.logf("sanity check failed")
 		return
 	}
-	//replace!
-	if err := os.Rename(tmpBinPath, mp.binPath); err != nil {
-		mp.logf("failed to replace binary: %s", err)
+	//overwrite!
+	if err := move(mp.binPath, tmpBinPath); err != nil {
+		mp.logf("failed to overwrite binary: %s", err)
 		return
 	}
 	mp.logf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
@@ -270,7 +264,7 @@ func (mp *master) fetch() {
 		case <-time.After(mp.TerminateTimeout):
 			//times up process, we did ask nicely!
 			mp.logf("graceful timeout, forcing exit")
-			mp.signals <- syscall.SIGKILL
+			mp.signals <- os.Kill
 		}
 	}
 	//and keep fetching...

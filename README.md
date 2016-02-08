@@ -77,6 +77,11 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) says hello
 app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 ```
 
+### Warnings
+
+* Bind `Addresses` can only be changed by restarting the main process
+* Only supported on darwin and linux
+
 ### Documentation
 
 * [Core `upgrade` package](https://godoc.org/github.com/jpillora/go-upgrade)
@@ -92,6 +97,23 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 * The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `go-upgrade`.
 * Once a binary is received, it is run with a simple echo token to confirm it is a `go-upgrade` binary.
 * Except for scheduled upgrades, the child process exiting will cause the main process to exit with the same code. So, **`go-upgrade` is not a process manager**.
+
+### Docker
+
+* Create the simple image:
+
+	```Dockerfile
+	FROM alpine:latest
+	RUN mkdir /apphome
+	VOLUME /apphome
+	CMD ["/apphome/app"]
+	```
+
+* Mount `-v` your binary directory to into the container as `/apphome`
+* Compile your application into binary directory`/app`
+* The application will update itself, which will be kept on disk incase of crashes etc
+
+Alternatively to mounting, `ADD app /apphome/app` and let it fetch the latest version each time it runs.
 
 ### Alternatives
 
