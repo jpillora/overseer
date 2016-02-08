@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,9 +31,11 @@ type master struct {
 	binPath             string
 	binPerms            os.FileMode
 	binHash             []byte
+	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
 	restarted           chan bool
+	awaitingUSR1        bool
 	descriptorsReleased chan bool
 	signalledAt         time.Time
 	signals             chan os.Signal
@@ -105,33 +108,38 @@ func (mp *master) setupSignalling() {
 	signal.Notify(mp.signals)
 	go func() {
 		for s := range mp.signals {
-
-			if s.String() == "child exited" {
-				continue
-			}
-
-			//**during a restart** a SIGUSR1 signals
-			//to the master process that, the file
-			//descriptors have been released
-			if mp.restarting && s == syscall.SIGUSR1 {
-				mp.descriptorsReleased <- true
-				continue
-			}
-
-			if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
-				mp.logf("proxy signal (%s)", s)
-				if err := mp.slaveCmd.Process.Signal(s); err != nil {
-					mp.logf("proxy signal failed (%s)", err)
-					os.Exit(1)
-				}
-			} else if s == syscall.SIGINT {
-				mp.logf("interupt with no slave")
-				os.Exit(1)
-			} else {
-				mp.logf("signal discarded (%s), no slave process", s)
-			}
+			mp.handleSignal(s)
 		}
 	}()
+}
+
+func (mp *master) handleSignal(s os.Signal) {
+	if s.String() == "child exited" {
+		// will occur on every restart
+	} else
+	//**during a restart** a SIGUSR1 signals
+	//to the master process that, the file
+	//descriptors have been released
+	if mp.awaitingUSR1 && s == syscall.SIGUSR1 {
+		mp.awaitingUSR1 = false
+		mp.descriptorsReleased <- true
+	} else
+	//while the slave process is running, proxy
+	//all signals through
+	if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
+		mp.logf("proxy signal (%s)", s)
+		if err := mp.slaveCmd.Process.Signal(s); err != nil {
+			mp.logf("proxy signal failed (%s)", err)
+			os.Exit(1)
+		}
+	} else
+	//otherwise if not running, kill on CTRL+c
+	if s == syscall.SIGINT {
+		mp.logf("interupt with no slave")
+		os.Exit(1)
+	} else {
+		mp.logf("signal discarded (%s), no slave process", s)
+	}
 }
 
 func (mp *master) retreiveFileDescriptors() {
@@ -156,16 +164,17 @@ func (mp *master) retreiveFileDescriptors() {
 	}
 }
 
+//fetchLoop is run in a goroutine
 func (mp *master) fetchLoop() {
-	minDelay := time.Second
-	time.Sleep(minDelay)
+	min := mp.Config.MinFetchInterval
+	time.Sleep(min)
 	for {
 		t0 := time.Now()
 		mp.fetch()
 		diff := time.Now().Sub(t0)
-		if diff < minDelay {
-			delay := minDelay - diff
-			//ensures at least minDelay
+		if diff < min {
+			delay := min - diff
+			//ensures at least MinFetchInterval delay.
 			//should be throttled by the fetcher!
 			time.Sleep(delay)
 		}
@@ -173,6 +182,9 @@ func (mp *master) fetchLoop() {
 }
 
 func (mp *master) fetch() {
+	if mp.restarting {
+		return //skip if restarting
+	}
 	mp.logf("checking for updates...")
 	reader, err := mp.Fetcher.Fetch()
 	if err != nil {
@@ -180,6 +192,7 @@ func (mp *master) fetch() {
 		return
 	}
 	if reader == nil {
+		mp.logf("no updates")
 		return //fetcher has explicitly said there are no updates
 	}
 	//optional closer
@@ -191,11 +204,14 @@ func (mp *master) fetch() {
 		mp.logf("failed to open temp binary: %s", err)
 		return
 	}
-	defer os.Remove(tmpBinPath)
+	defer func() {
+		tmpBin.Close()
+		os.Remove(tmpBinPath)
+	}()
 	//tee off to sha1
 	hash := sha1.New()
 	reader = io.TeeReader(reader, hash)
-	//write to temp
+	//write to a temp file
 	_, err = io.Copy(tmpBin, reader)
 	if err != nil {
 		mp.logf("failed to write temp binary: %s", err)
@@ -204,6 +220,7 @@ func (mp *master) fetch() {
 	//compare hash
 	newHash := hash.Sum(nil)
 	if bytes.Equal(mp.binHash, newHash) {
+		mp.logf("hash match - skip")
 		return
 	}
 	//copy permissions
@@ -212,7 +229,13 @@ func (mp *master) fetch() {
 		return
 	}
 	tmpBin.Close()
-	//sanity check
+	if mp.Config.PreUpgrade != nil {
+		if err := mp.Config.PreUpgrade(tmpBinPath); err != nil {
+			mp.logf("user cancelled upgrade: %s", err)
+			return
+		}
+	}
+	//go-upgrade sanity check, dont replace our good binary with a text file
 	buff := make([]byte, 8)
 	rand.Read(buff)
 	tokenIn := hex.EncodeToString(buff)
@@ -234,17 +257,21 @@ func (mp *master) fetch() {
 	}
 	mp.logf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
 	mp.binHash = newHash
-	//binary successfully replaced, perform graceful restart
-	mp.restarting = true
-	mp.signalledAt = time.Now()
-	mp.signals <- mp.Config.Signal //ask nicely to terminate
-	select {
-	case <-mp.restarted:
-		//success
-	case <-time.After(mp.TerminateTimeout):
-		//times up process, we did ask nicely!
-		mp.logf("graceful timeout, forcing exit")
-		mp.signals <- syscall.SIGKILL
+	//binary successfully replaced
+	if !mp.Config.NoRestart && mp.slaveCmd != nil {
+		//if running, perform graceful restart
+		mp.restarting = true
+		mp.awaitingUSR1 = true
+		mp.signalledAt = time.Now()
+		mp.signals <- mp.Config.Signal //ask nicely to terminate
+		select {
+		case <-mp.restarted:
+			//success
+		case <-time.After(mp.TerminateTimeout):
+			//times up process, we did ask nicely!
+			mp.logf("graceful timeout, forcing exit")
+			mp.signals <- syscall.SIGKILL
+		}
 	}
 	//and keep fetching...
 	return
@@ -268,14 +295,15 @@ func (mp *master) fork() {
 	e = append(e, envIsSlave+"=1")
 	e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.Config.Addresses)))
 	cmd.Env = e
+	//inherit master args/stdfiles
 	cmd.Args = os.Args
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	//include socket files
 	cmd.ExtraFiles = mp.slaveExtraFiles
 	if err := cmd.Start(); err != nil {
 		fatalf("failed to fork: %s", err)
-		os.Exit(1)
 	}
 	if mp.restarting {
 		mp.restartedAt = time.Now()
@@ -312,12 +340,13 @@ func (mp *master) fork() {
 		//if descriptors are released, the program
 		//has yielded control of its sockets and
 		//a new instance should be started to pick
-		//them up
+		//them up. The previous cmd.Wait() will still
+		//be consumed though it will be discarded.
 	}
 }
 
 func (mp *master) logf(f string, args ...interface{}) {
-	if mp.Logging {
+	if mp.Log {
 		log.Printf("[go-upgrade master] "+f, args...)
 	}
 }

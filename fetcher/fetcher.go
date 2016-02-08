@@ -6,7 +6,9 @@ type Interface interface {
 	//Fetch should check if there is an updated
 	//binary to fetch, and then stream it back the
 	//form of an io.Reader. If io.Reader is nil,
-	//then it is assumed there are no updates.
+	//then it is assumed there are no updates. Fetch
+	//will be run repeatly and forever. It is up the
+	//implementation to throttle the fetch frequency.
 	Fetch() (io.Reader, error)
 }
 

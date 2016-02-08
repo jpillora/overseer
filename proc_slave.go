@@ -38,10 +38,10 @@ type State struct {
 
 type slave struct {
 	Config
-	listeners []*upListener
-	ppid      int
-	pproc     *os.Process
-	state     State
+	listeners  []*upListener
+	masterPid  int
+	masterProc *os.Process
+	state      State
 }
 
 func (sp *slave) run() {
@@ -57,16 +57,16 @@ func (sp *slave) run() {
 }
 
 func (sp *slave) watchParent() {
-	sp.ppid = os.Getppid()
-	proc, err := os.FindProcess(sp.ppid)
+	sp.masterPid = os.Getppid()
+	proc, err := os.FindProcess(sp.masterPid)
 	if err != nil {
 		fatalf("parent process %s", err)
 	}
-	sp.pproc = proc
+	sp.masterProc = proc
 	go func() {
 		for {
 			//sending signal 0 should not error as long as the process is alive
-			if err := sp.pproc.Signal(syscall.Signal(0)); err != nil {
+			if err := sp.masterProc.Signal(syscall.Signal(0)); err != nil {
 				os.Exit(1)
 			}
 			time.Sleep(2 * time.Second)
@@ -111,14 +111,14 @@ func (sp *slave) watchSignal() {
 		}
 		sp.logf("released")
 		//signal released fds
-		sp.pproc.Signal(syscall.SIGUSR1)
+		sp.masterProc.Signal(syscall.SIGUSR1)
 		sp.logf("notify USR1")
 		//listeners should be waiting on connections to close...
 	}()
 }
 
 func (sp *slave) logf(f string, args ...interface{}) {
-	if sp.Logging {
+	if sp.Log {
 		log.Printf("[go-upgrade slave] "+f, args...)
 	}
 }

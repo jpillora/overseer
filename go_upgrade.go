@@ -1,3 +1,4 @@
+// Daemonizable self-upgrading binaries in Go (golang).
 package upgrade
 
 import (
@@ -19,7 +20,7 @@ const (
 
 type Config struct {
 	//Optional allows go-upgrade to fallback to running
-	//running the program with
+	//running the program in the main process.
 	Optional bool
 	//Program's main function
 	Program func(state State)
@@ -34,10 +35,17 @@ type Config struct {
 	//wait for the program to terminate itself. After this
 	//timeout, go-upgrade will issue a SIGKILL.
 	TerminateTimeout time.Duration
-	//Restarts will be throttled by this duration.
-	ThrottleRestarts time.Duration
-	//Logging enables [go-upgrade] logs to be sent to stdout.
-	Logging bool
+	//MinFetchInterval defines the smallest duration between Fetch()s.
+	//This helps to prevent unwieldy fetch.Interfaces from hogging
+	//too many resources. Defaults to 1 second.
+	MinFetchInterval time.Duration
+	//PreUpgrade runs after a binary has been retreived, user defined checks
+	//can be run here and returning an error will cancel the upgrade.
+	PreUpgrade func(tempBinaryPath string) error
+	//NoRestart disables automatic restarts after each upgrade.
+	NoRestart bool
+	//Log enables [go-upgrade] logs to be sent to stdout.
+	Log bool
 	//Fetcher will be used to fetch binaries.
 	Fetcher fetcher.Interface
 }
@@ -67,6 +75,9 @@ func Run(c Config) {
 	}
 	if c.TerminateTimeout == 0 {
 		c.TerminateTimeout = 30 * time.Second
+	}
+	if c.MinFetchInterval == 0 {
+		c.MinFetchInterval = 1 * time.Second
 	}
 	if c.Fetcher == nil {
 		fatalf("upgrade.Config.Fetcher required")

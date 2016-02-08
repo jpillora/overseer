@@ -47,6 +47,7 @@ func (l *upListener) Accept() (net.Conn, error) {
 	return uconn, nil
 }
 
+//non-blocking trigger close
 func (l *upListener) release(timeout time.Duration) {
 	//stop accepting connections - release fd
 	l.closeError = l.Listener.Close()
@@ -66,6 +67,7 @@ func (l *upListener) release(timeout time.Duration) {
 	}()
 }
 
+//blocking wait for close
 func (l *upListener) Close() error {
 	l.wg.Wait()
 	return l.closeError
@@ -78,6 +80,7 @@ func (l *upListener) File() *os.File {
 	return fl
 }
 
+//notifying on close net.Conn
 type upConn struct {
 	net.Conn
 	wg     *sync.WaitGroup
