@@ -103,12 +103,7 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 * Github fetcher (given a repo)
 * S3 fetcher (given a bucket and credentials)
 * etcd fetcher (given a cluster, watch key)
-* `go-upgrade` CLI tool
-	* Calculate delta updates with https://github.com/kr/binarydist ([courgette](http://dev.chromium.org/developers/design-documents/software-updates-courgette) would be nice)
-	* Signed binaries and updates *(use HTTPS where in the meantime)*
-		* Create signing ECDSA private and private key, store locally
-		* Build binaries and include public key with `-ldflags "-X github.com/jpillora/go-upgrade/fetcher.PublicKey=A" -o myapp`
-		* Only accept future updates with binaries signed by the matching private key
+* `go-upgrade` CLI tool ([TODO](cmd/go-upgrade/TODO.md))
 * `upgrade` package
 	* Execute and verify calculated delta updates with https://github.com/kr/binarydist
 	* [Omaha](https://coreos.com/docs/coreupdate/custom-apps/coreupdate-protocol/) client support
