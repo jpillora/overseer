@@ -1,5 +1,5 @@
 // +build !linux,!darwin
 
-package upgrade
+package overseer
 
 const supported = false

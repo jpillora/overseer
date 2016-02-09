@@ -3,6 +3,11 @@ package fetcher
 import "io"
 
 type Interface interface {
+	//Init should perform validation on fields. For
+	//example, ensure the appropriate URLs or keys
+	//are defined or ensure there is connectivity
+	//to the appropriate web service.
+	Init() error
 	//Fetch should check if there is an updated
 	//binary to fetch, and then stream it back the
 	//form of an io.Reader. If io.Reader is nil,
@@ -19,6 +24,10 @@ func Func(fn func() (io.Reader, error)) Interface {
 
 type fetcher struct {
 	fn func() (io.Reader, error)
+}
+
+func (f fetcher) Init() error {
+	return nil //skip
 }
 
 func (f fetcher) Fetch() (io.Reader, error) {

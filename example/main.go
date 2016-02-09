@@ -5,8 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jpillora/go-upgrade"
-	"github.com/jpillora/go-upgrade/fetcher"
+	"github.com/jpillora/overseer"
 )
 
 //see example.sh for the use-case
@@ -15,7 +14,7 @@ var BUILD_ID = "0"
 
 //convert your 'main()' into a 'prog(state)'
 //'prog()' is run in a child process
-func prog(state upgrade.State) {
+func prog(state overseer.State) {
 	fmt.Printf("app#%s (%s) listening...\n", BUILD_ID, state.ID)
 	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d, _ := time.ParseDuration(r.URL.Query().Get("d"))
@@ -29,13 +28,13 @@ func prog(state upgrade.State) {
 //then create another 'main' which runs the upgrades
 //'main()' is run in the initial process
 func main() {
-	upgrade.Run(upgrade.Config{
-		Log:     false, //display log of go-upgrade actions
+	overseer.Run(overseer.Config{
+		Log:     true, //display log of overseer actions
 		Program: prog,
-		Address: ":3000",
-		Fetcher: &fetcher.HTTP{
-			URL:      "http://localhost:4000/myappnew",
-			Interval: 1 * time.Second,
-		},
+		Address: ":5001",
+		// Fetcher: &fetcher.HTTP{
+		// 	URL:      "http://localhost:5002/myappnew",
+		// 	Interval: 1 * time.Second,
+		// },
 	})
 }

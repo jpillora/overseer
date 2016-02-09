@@ -1,5 +1,5 @@
 // Daemonizable self-upgrading binaries in Go (golang).
-package upgrade
+package overseer
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/jpillora/go-upgrade/fetcher"
+	"github.com/jpillora/overseer/fetcher"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 )
 
 type Config struct {
-	//Optional allows go-upgrade to fallback to running
+	//Optional allows overseer to fallback to running
 	//running the program in the main process.
 	Optional bool
 	//Program's main function
@@ -28,12 +28,11 @@ type Config struct {
 	Address string
 	//Program's zero-downtime socket listening addresses (set this or Address)
 	Addresses []string
-	//Signal program will accept to initiate graceful
-	//application termination. Defaults to SIGTERM.
-	Signal os.Signal
-	//TerminateTimeout controls how long go-upgrade should
+	//RestartSignal will manually trigger a graceful restart. Defaults to SIGUSR2.
+	RestartSignal os.Signal
+	//TerminateTimeout controls how long overseer should
 	//wait for the program to terminate itself. After this
-	//timeout, go-upgrade will issue a SIGKILL.
+	//timeout, overseer will issue a SIGKILL.
 	TerminateTimeout time.Duration
 	//MinFetchInterval defines the smallest duration between Fetch()s.
 	//This helps to prevent unwieldy fetch.Interfaces from hogging
@@ -42,16 +41,16 @@ type Config struct {
 	//PreUpgrade runs after a binary has been retreived, user defined checks
 	//can be run here and returning an error will cancel the upgrade.
 	PreUpgrade func(tempBinaryPath string) error
-	//NoRestart disables automatic restarts after each upgrade.
-	NoRestart bool
-	//Log enables [go-upgrade] logs to be sent to stdout.
+	//Log enables [overseer] logs to be sent to stdout.
 	Log bool
+	//NoRestartAfterFetch disables automatic restarts after each upgrade.
+	NoRestartAfterFetch bool
 	//Fetcher will be used to fetch binaries.
 	Fetcher fetcher.Interface
 }
 
 func fatalf(f string, args ...interface{}) {
-	log.Fatalf("[go-upgrade] "+f, args...)
+	log.Fatalf("[overseer] "+f, args...)
 }
 
 func Run(c Config) {
@@ -62,25 +61,24 @@ func Run(c Config) {
 	}
 	//validate
 	if c.Program == nil {
-		fatalf("upgrade.Config.Program required")
+		fatalf("overseer.Config.Program required")
 	}
 	if c.Address != "" {
 		if len(c.Addresses) > 0 {
-			fatalf("upgrade.Config.Address and Addresses cant both be set")
+			fatalf("overseer.Config.Address and Addresses cant both be set")
 		}
 		c.Addresses = []string{c.Address}
+	} else if len(c.Addresses) > 0 {
+		c.Address = c.Addresses[0]
 	}
-	if c.Signal == nil {
-		c.Signal = SIGTERM
+	if c.RestartSignal == nil {
+		c.RestartSignal = SIGUSR2
 	}
 	if c.TerminateTimeout == 0 {
 		c.TerminateTimeout = 30 * time.Second
 	}
 	if c.MinFetchInterval == 0 {
 		c.MinFetchInterval = 1 * time.Second
-	}
-	if c.Fetcher == nil {
-		fatalf("upgrade.Config.Fetcher required")
 	}
 	//os not supported
 	if !supported {

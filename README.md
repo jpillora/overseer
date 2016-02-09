@@ -1,15 +1,22 @@
-# go-upgrade
+# overseer
 
-[![GoDoc](https://godoc.org/github.com/jpillora/go-upgrade?status.svg)](https://godoc.org/github.com/jpillora/go-upgrade)
+[![GoDoc](https://godoc.org/github.com/jpillora/overseer?status.svg)](https://godoc.org/github.com/jpillora/overseer)
 
 Daemonizable self-upgrading binaries in Go (golang).
 
 The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers. The secondary goal is user simplicity. :warning: This is beta software.
 
+### Features
+
+* Works with process managers
+* Simple
+* Graceful, zero-down time restarts
+* Allows self-upgrading binaries
+
 ### Install
 
 ```
-go get github.com/jpillora/go-upgrade
+go get github.com/jpillora/overseer
 ```
 
 ### Quick Usage
@@ -23,32 +30,31 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jpillora/go-upgrade"
-	"github.com/jpillora/go-upgrade/fetcher"
+	"github.com/jpillora/overseer"
+	"github.com/jpillora/overseer/fetcher"
 )
 
-//convert your 'main()' into a 'prog(state)'
-//'prog()' is run in a child process
-func prog(state upgrade.State) {
-	log.Printf("app (%s) listening...", state.ID)
-	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "app (%s) says hello\n", state.ID)
-	}))
-	http.Serve(state.Listener, nil)
-}
-
-//then create another 'main()' which runs the upgrades
-//'main()' is run in the initial process
+//convert your main() into a 'prog(state)' and then
+//create another main() to run the main process
 func main() {
-	upgrade.Run(upgrade.Config{
+	overseer.Run(overseer.Config{
 		Program: prog,
 		Address: ":3000",
 		Fetcher: &fetcher.HTTP{
 			URL:      "http://localhost:4000/binaries/myapp",
 			Interval: 1 * time.Second,
 		},
-		// Log: false, //display log of go-upgrade actions
+		// Log: false, //display log of overseer actions
 	})
+}
+
+//prog(state) runs in a child process
+func prog(state overseer.State) {
+	log.Printf("app (%s) listening...", state.ID)
+	http.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "app (%s) says hello\n", state.ID)
+	}))
+	http.Serve(state.Listener, nil)
 }
 ```
 
@@ -84,36 +90,32 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### Documentation
 
-* [Core `upgrade` package](https://godoc.org/github.com/jpillora/go-upgrade)
-* [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/go-upgrade/fetcher#Interface)
-* [Basic `fetcher.HTTP` fetcher type](https://godoc.org/github.com/jpillora/go-upgrade/fetcher#HTTP)
+* [Core `upgrade` package](https://godoc.org/github.com/jpillora/overseer)
+* [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/overseer/fetcher#Interface)
+* [Basic `fetcher.HTTP` fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
 
 ### Architecture overview
 
-* `go-upgrade` uses the main process to check for and install upgrades and a child process to run `Program`
+* `overseer` uses the main process to check for and install upgrades and a child process to run `Program`
 * All child process pipes are connected back to the main process
 * All signals received on the main process are forwarded through to the child process
 * The provided `fetcher.Interface` will be used to `Fetch()` the latest build of the binary
-* The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `go-upgrade`.
-* Once a binary is received, it is run with a simple echo token to confirm it is a `go-upgrade` binary.
-* Except for scheduled upgrades, the child process exiting will cause the main process to exit with the same code. So, **`go-upgrade` is not a process manager**.
+* The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `overseer`.
+* Once a binary is received, it is run with a simple echo token to confirm it is a `overseer` binary.
+* Except for scheduled upgrades, the child process exiting will cause the main process to exit with the same code. So, **`overseer` is not a process manager**.
 
 ### Docker
 
-* Create the simple image:
+* Compile your `overseer`able `app` to a `/path/on/docker/host/myapp/app`
+* Then run it with
 
-	```Dockerfile
-	FROM alpine:latest
-	RUN mkdir /apphome
-	VOLUME /apphome
-	CMD ["/apphome/app"]
+	```
+	#run app inside alpine linux (5MB linux distro)
+	docker run -d -v /path/on/docker/host/myapp/:/home/ -w /home/ alpine  -w /home/app
 	```
 
-* Mount `-v` your binary directory to into the container as `/apphome`
-* Compile your application into binary directory`/app`
-* The application will update itself, which will be kept on disk incase of crashes etc
-
-Alternatively to mounting, `ADD app /apphome/app` and let it fetch the latest version each time it runs.
+* For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
+* `app` can use the current working directory as storage
 
 ### Alternatives
 
@@ -125,7 +127,7 @@ Alternatively to mounting, `ADD app /apphome/app` and let it fetch the latest ve
 * Github fetcher (given a repo)
 * S3 fetcher (given a bucket and credentials)
 * etcd fetcher (given a cluster, watch key)
-* `go-upgrade` CLI tool ([TODO](cmd/go-upgrade/TODO.md))
+* `overseer` CLI tool ([TODO](cmd/overseer/TODO.md))
 * `upgrade` package
 	* Execute and verify calculated delta updates with https://github.com/kr/binarydist
 	* [Omaha](https://coreos.com/docs/coreupdate/custom-apps/coreupdate-protocol/) client support

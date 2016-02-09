@@ -1,6 +1,6 @@
 // +build linux darwin
 
-package upgrade
+package overseer
 
 //this file attempts to contain all posix
 //specific stuff, that needs to be implemented
@@ -15,11 +15,13 @@ const supported = true
 
 var (
 	SIGUSR1 = syscall.SIGUSR1
+	SIGUSR2 = syscall.SIGUSR2
 	SIGTERM = syscall.SIGTERM
 )
 
 func move(dst, src string) error {
-	// HACK: we're shelling out to mv because linux
-	//throws errors when we use Rename/Create.
+	//HACK: we're shelling out to mv because linux
+	//throws errors when we use Rename/Create a
+	//running binary.
 	return exec.Command("mv", src, dst).Run()
 }

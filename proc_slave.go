@@ -1,4 +1,4 @@
-package upgrade
+package overseer
 
 import (
 	"log"
@@ -12,15 +12,15 @@ import (
 
 var (
 	//DisabledState is a placeholder state for when
-	//go-upgrade is disabled and the program function
+	//overseer is disabled and the program function
 	//is run manually.
 	DisabledState = State{Enabled: false}
 )
 
 type State struct {
-	//whether go-upgrade is running enabled. When enabled,
+	//whether overseer is running enabled. When enabled,
 	//this program will be running in a child process and
-	//go-upgrade will perform rolling upgrades.
+	//overseer will perform rolling upgrades.
 	Enabled bool
 	//ID is a SHA-1 hash of the current running binary
 	ID string
@@ -32,9 +32,16 @@ type State struct {
 	//process. These are all passed into this program in the
 	//same order they are specified in Config.Addresses.
 	Listeners []net.Listener
+	//Program's first listening address
+	Address string
+	//Program's listening addresses
+	Addresses []string
+	//GracefulShutdown will be filled when its time to perform
+	//a graceful shutdown.
+	GracefulShutdown chan bool
 }
 
-//a go-upgrade slave process
+//a overseer slave process
 
 type slave struct {
 	Config
@@ -48,6 +55,9 @@ func (sp *slave) run() {
 	sp.state.Enabled = true
 	sp.state.ID = os.Getenv(envBinID)
 	sp.state.StartedAt = time.Now()
+	sp.state.Address = sp.Config.Address
+	sp.state.Addresses = sp.Config.Addresses
+	sp.state.GracefulShutdown = make(chan bool, 1)
 	sp.watchParent()
 	sp.initFileDescriptors()
 	sp.watchSignal()
@@ -99,24 +109,34 @@ func (sp *slave) initFileDescriptors() {
 
 func (sp *slave) watchSignal() {
 	signals := make(chan os.Signal)
-	signal.Notify(signals, sp.Config.Signal)
+	signal.Notify(signals, sp.Config.RestartSignal)
 	go func() {
 		<-signals
 		signal.Stop(signals)
+		sp.logf("graceful shutdown requested")
 		//master wants to restart,
-		//perform graceful shutdown:
-		for _, l := range sp.listeners {
-			l.release(sp.Config.TerminateTimeout)
+		sp.state.GracefulShutdown <- true
+		//release any sockets and notify master
+		if len(sp.listeners) > 0 {
+			//perform graceful shutdown
+			for _, l := range sp.listeners {
+				l.release(sp.Config.TerminateTimeout)
+			}
+			//signal release of held sockets
+			sp.masterProc.Signal(SIGUSR1)
+			//listeners should be waiting on connections to close...
 		}
-		//signal released fds
-		sp.masterProc.Signal(SIGUSR1)
-		//listeners should be waiting on connections to close...
-		sp.logf("graceful shutdown")
+		//start death-timer
+		go func() {
+			time.Sleep(sp.Config.TerminateTimeout)
+			sp.logf("timeout. forceful shutdown")
+			os.Exit(1)
+		}()
 	}()
 }
 
 func (sp *slave) logf(f string, args ...interface{}) {
 	if sp.Log {
-		log.Printf("[go-upgrade slave] "+f, args...)
+		log.Printf("[overseer slave] "+f, args...)
 	}
 }

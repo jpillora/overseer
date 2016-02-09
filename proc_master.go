@@ -1,4 +1,4 @@
-package upgrade
+package overseer
 
 import (
 	"bytes"
@@ -21,9 +21,9 @@ import (
 	"github.com/kardianos/osext"
 )
 
-var tmpBinPath = filepath.Join(os.TempDir(), "goupgrade")
+var tmpBinPath = filepath.Join(os.TempDir(), "overseer")
 
-//a go-upgrade master process
+//a overseer master process
 type master struct {
 	Config
 	slaveCmd            *exec.Cmd
@@ -38,7 +38,6 @@ type master struct {
 	awaitingUSR1        bool
 	descriptorsReleased chan bool
 	signalledAt         time.Time
-	signals             chan os.Signal
 }
 
 func (mp *master) run() {
@@ -47,14 +46,23 @@ func (mp *master) run() {
 			fatalf("%s", err)
 		}
 		//run program directly
-		mp.logf("%s, disabling go-upgrade.", err)
+		mp.logf("%s, disabling overseer.", err)
 		mp.Program(DisabledState)
 		return
 	}
+	if mp.Config.Fetcher != nil {
+		if err := mp.Config.Fetcher.Init(); err != nil {
+			mp.logf("fetcher init failed (%s)", err)
+			mp.Config.Fetcher = nil
+		}
+	}
 	mp.setupSignalling()
 	mp.retreiveFileDescriptors()
-	mp.fetch()
-	go mp.fetchLoop()
+	if mp.Config.Fetcher != nil {
+		//TODO is required? fatalf("overseer.Config.Fetcher required")
+		mp.fetch()
+		go mp.fetchLoop()
+	}
 	mp.forkLoop()
 }
 
@@ -98,23 +106,27 @@ func (mp *master) setupSignalling() {
 	mp.restarted = make(chan bool)
 	mp.descriptorsReleased = make(chan bool)
 	//read all master process signals
-	mp.signals = make(chan os.Signal)
-	signal.Notify(mp.signals)
+	signals := make(chan os.Signal)
+	signal.Notify(signals)
 	go func() {
-		for s := range mp.signals {
+		for s := range signals {
 			mp.handleSignal(s)
 		}
 	}()
 }
 
 func (mp *master) handleSignal(s os.Signal) {
-	if s.String() == "child exited" {
+	if s == mp.RestartSignal {
+		//user initiated manual restart
+		mp.triggerRestart()
+	} else if s.String() == "child exited" {
 		// will occur on every restart
 	} else
 	//**during a restart** a SIGUSR1 signals
 	//to the master process that, the file
 	//descriptors have been released
 	if mp.awaitingUSR1 && s == SIGUSR1 {
+		mp.logf("signaled, sockets ready")
 		mp.awaitingUSR1 = false
 		mp.descriptorsReleased <- true
 	} else
@@ -122,10 +134,7 @@ func (mp *master) handleSignal(s os.Signal) {
 	//all signals through
 	if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
 		mp.logf("proxy signal (%s)", s)
-		if err := mp.slaveCmd.Process.Signal(s); err != nil {
-			mp.logf("proxy signal failed (%s)", err)
-			os.Exit(1)
-		}
+		mp.sendSignal(s)
 	} else
 	//otherwise if not running, kill on CTRL+c
 	if s == os.Interrupt {
@@ -133,6 +142,13 @@ func (mp *master) handleSignal(s os.Signal) {
 		os.Exit(1)
 	} else {
 		mp.logf("signal discarded (%s), no slave process", s)
+	}
+}
+
+func (mp *master) sendSignal(s os.Signal) {
+	if err := mp.slaveCmd.Process.Signal(s); err != nil {
+		mp.logf("signal failed (%s), assuming slave process died", err)
+		os.Exit(1)
 	}
 }
 
@@ -229,7 +245,7 @@ func (mp *master) fetch() {
 			return
 		}
 	}
-	//go-upgrade sanity check, dont replace our good binary with a text file
+	//overseer sanity check, dont replace our good binary with a text file
 	buff := make([]byte, 8)
 	rand.Read(buff)
 	tokenIn := hex.EncodeToString(buff)
@@ -252,23 +268,35 @@ func (mp *master) fetch() {
 	mp.logf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
 	mp.binHash = newHash
 	//binary successfully replaced
-	if !mp.Config.NoRestart && mp.slaveCmd != nil {
-		//if running, perform graceful restart
-		mp.restarting = true
-		mp.awaitingUSR1 = true
-		mp.signalledAt = time.Now()
-		mp.signals <- mp.Config.Signal //ask nicely to terminate
-		select {
-		case <-mp.restarted:
-			//success
-		case <-time.After(mp.TerminateTimeout):
-			//times up process, we did ask nicely!
-			mp.logf("graceful timeout, forcing exit")
-			mp.signals <- os.Kill
-		}
+	if !mp.Config.NoRestartAfterFetch {
+		mp.triggerRestart()
 	}
 	//and keep fetching...
 	return
+}
+
+func (mp *master) triggerRestart() {
+	if mp.restarting {
+		mp.logf("already graceful restarting")
+		return //skip
+	} else if mp.slaveCmd == nil || mp.restarting {
+		mp.logf("no slave process")
+		return //skip
+	}
+	mp.logf("graceful restart triggered")
+	mp.restarting = true
+	mp.awaitingUSR1 = true
+	mp.signalledAt = time.Now()
+	mp.sendSignal(mp.Config.RestartSignal) //ask nicely to terminate
+	select {
+	case <-mp.restarted:
+		//success
+		mp.logf("restart success")
+	case <-time.After(mp.TerminateTimeout):
+		//times up process, we did ask nicely!
+		mp.logf("graceful timeout, forcing exit")
+		mp.sendSignal(os.Kill)
+	}
 }
 
 //not a real fork
@@ -341,6 +369,6 @@ func (mp *master) fork() {
 
 func (mp *master) logf(f string, args ...interface{}) {
 	if mp.Log {
-		log.Printf("[go-upgrade master] "+f, args...)
+		log.Printf("[overseer master] "+f, args...)
 	}
 }

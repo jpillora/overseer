@@ -9,7 +9,7 @@ import (
 
 //HTTPFetcher uses HEAD requests to poll the status of a given
 //file. If it detects this file has been updated, it will fetch
-//and stream out to the binary writer.
+//and return its io.Reader stream.
 type HTTP struct {
 	//URL to poll for new binaries
 	URL          string
@@ -23,20 +23,22 @@ type HTTP struct {
 //if any of these change, the binary has been updated
 var defaultHTTPCheckHeaders = []string{"ETag", "If-Modified-Since", "Last-Modified", "Content-Length"}
 
-func (h *HTTP) Fetch() (io.Reader, error) {
+func (h *HTTP) Init() error {
 	//apply defaults
 	if h.URL == "" {
-		return nil, fmt.Errorf("fetcher.HTTP requires a URL")
+		return fmt.Errorf("URL required")
 	}
+	h.lasts = map[string]string{}
 	if h.Interval == 0 {
 		h.Interval = 5 * time.Minute
 	}
 	if h.CheckHeaders == nil {
 		h.CheckHeaders = defaultHTTPCheckHeaders
 	}
-	if h.lasts == nil {
-		h.lasts = map[string]string{}
-	}
+	return nil
+}
+
+func (h *HTTP) Fetch() (io.Reader, error) {
 	//delay fetches after first
 	if h.delay {
 		time.Sleep(h.Interval)

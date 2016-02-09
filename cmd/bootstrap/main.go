@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jpillora/go-upgrade"
-	"github.com/jpillora/go-upgrade/fetcher"
+	"github.com/jpillora/overseer"
+	"github.com/jpillora/overseer/fetcher"
 	"github.com/jpillora/opts"
 )
 
@@ -19,9 +19,9 @@ func main() {
 		Log:  true,
 	}
 	opts.Parse(&c)
-	upgrade.Run(upgrade.Config{
+	overseer.Run(overseer.Config{
 		Log: c.Log,
-		Program: func(state upgrade.State) {
+		Program: func(state overseer.State) {
 			//noop
 			select {}
 		},

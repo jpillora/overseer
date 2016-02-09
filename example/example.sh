@@ -1,11 +1,11 @@
 #!/bin/bash
 
 #NOTE: DONT CTRL+C OR CLEANUP WONT OCCUR
-#      ENSURE PORTS 3000,4000 ARE UNUSED
+#      ENSURE PORTS 5001,5002 ARE UNUSED
 
 #http file server
 go get github.com/jpillora/serve
-serve --port 4000 --quiet . &
+serve --port 5002 --quiet . &
 SERVEPID=$!
 
 #initial build
@@ -17,33 +17,33 @@ echo "RUNNING APP"
 APPPID=$!
 
 sleep 1
-curl localhost:3000
+curl localhost:5001
 sleep 1
-curl localhost:3000
+curl localhost:5001
 sleep 1
 #request during an update
-curl localhost:3000?d=5s &
+curl localhost:5001?d=5s &
 
 go build -ldflags '-X main.BUILD_ID=2' -o myappnew
 echo "BUILT APP (2)"
 
 sleep 2
-curl localhost:3000
+curl localhost:5001
 sleep 1
-curl localhost:3000
+curl localhost:5001
 sleep 1
 #request during an update
-curl localhost:3000?d=5s &
+curl localhost:5001?d=5s &
 
 go build -ldflags '-X main.BUILD_ID=3' -o myappnew
 echo "BUILT APP (3)"
 
 sleep 2
-curl localhost:3000
+curl localhost:5001
 sleep 1
-curl localhost:3000
+curl localhost:5001
 sleep 1
-curl localhost:3000
+curl localhost:5001
 
 #end demo - cleanup
 kill $SERVEPID
