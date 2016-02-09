@@ -8,14 +8,14 @@ The main goal of this project is to facilitate the creation of self-upgrading bi
 
 ### Features
 
-* Works with process managers
 * Simple
+* Works with process managers
 * Graceful, zero-down time restarts
-* Allows self-upgrading binaries
+* Easy self-upgrading binaries
 
 ### Install
 
-```
+```sh
 go get github.com/jpillora/overseer
 ```
 
@@ -44,7 +44,7 @@ func main() {
 			URL:      "http://localhost:4000/binaries/myapp",
 			Interval: 1 * time.Second,
 		},
-		// Log: false, //display log of overseer actions
+		// Log: true, //display log of overseer actions
 	})
 }
 
@@ -90,7 +90,7 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### Documentation
 
-* [Core `upgrade` package](https://godoc.org/github.com/jpillora/overseer)
+* [Core `overseer` package](https://godoc.org/github.com/jpillora/overseer)
 * [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/overseer/fetcher#Interface)
 * [Basic `fetcher.HTTP` fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
 
@@ -106,16 +106,16 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### Docker
 
-* Compile your `overseer`able `app` to a `/path/on/docker/host/myapp/app`
-* Then run it with
+1. Compile your `overseer`able `app` to a `/path/on/docker/host/myapp/app`
+1. Then run it with:
 
-	```
+	```sh
 	#run app inside alpine linux (5MB linux distro)
 	docker run -d -v /path/on/docker/host/myapp/:/home/ -w /home/ alpine  -w /home/app
 	```
 
-* For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
-* `app` can use the current working directory as storage
+1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
+1. `app` can use the current working directory as storage
 
 ### Alternatives
 
@@ -128,6 +128,6 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 * S3 fetcher (given a bucket and credentials)
 * etcd fetcher (given a cluster, watch key)
 * `overseer` CLI tool ([TODO](cmd/overseer/TODO.md))
-* `upgrade` package
+* `overseer` package
 	* Execute and verify calculated delta updates with https://github.com/kr/binarydist
 	* [Omaha](https://coreos.com/docs/coreupdate/custom-apps/coreupdate-protocol/) client support

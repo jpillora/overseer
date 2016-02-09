@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -34,17 +35,21 @@ func (s *S3) Init() error {
 	} else if s.Key == "" {
 		return errors.New("S3 key not set")
 	}
-	if s.Access == "" {
-		s.client = s3.New(session.New())
-	} else {
-		if s.Region == "" {
-			s.Region = "ap-southeast-2"
-		}
-		s.client = s3.New(session.New(&aws.Config{
-			Credentials: credentials.NewStaticCredentials(s.Access, s.Secret, ""),
-			Region:      &s.Region,
-		}))
+	if s.Region == "" {
+		s.Region = "ap-southeast-2"
 	}
+	creds := credentials.AnonymousCredentials
+	if s.Access != "" {
+		creds = credentials.NewStaticCredentials(s.Access, s.Secret, "")
+	} else if os.Getenv("AWS_ACCESS_KEY") != "" {
+		creds = credentials.NewEnvCredentials()
+	}
+	config := &aws.Config{
+		Credentials: creds,
+		Region:      &s.Region,
+	}
+	s.client = s3.New(session.New(config))
+
 	//TODO include this? maybe given access to bucket after init
 	// resp, err := s.client.HeadBucketRequest(&s3.HeadBucketInput{Bucket: &s.Bucket})
 	// if err != nil {}
