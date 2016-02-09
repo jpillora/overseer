@@ -21,14 +21,14 @@ import (
 	"github.com/kardianos/osext"
 )
 
-var tmpBinPath = filepath.Join(os.TempDir(), "overseer")
+var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
 
 //a overseer master process
 type master struct {
 	Config
 	slaveCmd            *exec.Cmd
 	slaveExtraFiles     []*os.File
-	binPath             string
+	binPath, tmpBinPath string
 	binPerms            os.FileMode
 	binHash             []byte
 	restartMux          sync.Mutex
@@ -90,12 +90,11 @@ func (mp *master) checkBinary() error {
 	io.Copy(hash, f)
 	mp.binHash = hash.Sum(nil)
 	f.Close()
-	//tmp path
-	tmpPath := mp.binPath + ".tmp"
-	if err := os.Rename(mp.binPath, tmpPath); err != nil {
+	//test bin<->tmpbin moves
+	if err := os.Rename(mp.binPath, tmpBinPath); err != nil {
 		return fmt.Errorf("cannot move binary (%s)", err)
 	}
-	if err := os.Rename(tmpPath, mp.binPath); err != nil {
+	if err := os.Rename(tmpBinPath, mp.binPath); err != nil {
 		return fmt.Errorf("cannot move binary back (%s)", err)
 	}
 	return nil
@@ -195,6 +194,7 @@ func (mp *master) fetch() {
 	if mp.restarting {
 		return //skip if restarting
 	}
+
 	mp.logf("checking for updates...")
 	reader, err := mp.Fetcher.Fetch()
 	if err != nil {
@@ -205,19 +205,20 @@ func (mp *master) fetch() {
 		mp.logf("no updates")
 		return //fetcher has explicitly said there are no updates
 	}
+	mp.logf("streaming update...")
 	//optional closer
 	if closer, ok := reader.(io.Closer); ok {
 		defer closer.Close()
 	}
-	tmpBin, err := os.Create(tmpBinPath)
+	tmpBin, err := os.OpenFile(tmpBinPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		mp.logf("failed to open temp binary: %s", err)
 		return
 	}
-	defer func() {
-		tmpBin.Close()
-		os.Remove(tmpBinPath)
-	}()
+	// defer func() {
+	// 	tmpBin.Close()
+	// 	os.Remove(tmpBinPath)
+	// }()
 	//tee off to sha1
 	hash := sha1.New()
 	reader = io.TeeReader(reader, hash)
@@ -235,20 +236,30 @@ func (mp *master) fetch() {
 	}
 	//copy permissions
 	if err := tmpBin.Chmod(mp.binPerms); err != nil {
-		mp.logf("failed to make binary executable: %s", err)
+		mp.logf("failed to make temp binary executable: %s", err)
+		return
+	}
+	if err := tmpBin.Chown(uid, gid); err != nil {
+		mp.logf("failed to change owner of binary: %s", err)
+		return
+	}
+	if _, err := tmpBin.Stat(); err != nil {
+		mp.logf("failed to stat temp binary: %s", err)
 		return
 	}
 	tmpBin.Close()
+	if _, err := os.Stat(tmpBinPath); err != nil {
+		mp.logf("failed to stat temp binary by path: %s", err)
+		return
+	}
 	if mp.Config.PreUpgrade != nil {
 		if err := mp.Config.PreUpgrade(tmpBinPath); err != nil {
 			mp.logf("user cancelled upgrade: %s", err)
 			return
 		}
 	}
-	//overseer sanity check, dont replace our good binary with a text file
-	buff := make([]byte, 8)
-	rand.Read(buff)
-	tokenIn := hex.EncodeToString(buff)
+	//overseer sanity check, dont replace our good binary with a non-executable file
+	tokenIn := token()
 	cmd := exec.Command(tmpBinPath)
 	cmd.Env = []string{envBinCheck + "=" + tokenIn}
 	tokenOut, err := cmd.Output()
@@ -261,7 +272,7 @@ func (mp *master) fetch() {
 		return
 	}
 	//overwrite!
-	if err := move(mp.binPath, tmpBinPath); err != nil {
+	if err := os.Rename(tmpBinPath, mp.binPath); err != nil {
 		mp.logf("failed to overwrite binary: %s", err)
 		return
 	}
@@ -371,4 +382,10 @@ func (mp *master) logf(f string, args ...interface{}) {
 	if mp.Log {
 		log.Printf("[overseer master] "+f, args...)
 	}
+}
+
+func token() string {
+	buff := make([]byte, 8)
+	rand.Read(buff)
+	return hex.EncodeToString(buff)
 }

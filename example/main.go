@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jpillora/overseer"
+	"github.com/jpillora/overseer/fetcher"
 )
 
 //see example.sh for the use-case
@@ -32,9 +33,9 @@ func main() {
 		Log:     true, //display log of overseer actions
 		Program: prog,
 		Address: ":5001",
-		// Fetcher: &fetcher.HTTP{
-		// 	URL:      "http://localhost:5002/myappnew",
-		// 	Interval: 1 * time.Second,
-		// },
+		Fetcher: &fetcher.HTTP{
+			URL:      "http://localhost:5002/myappnew",
+			Interval: 1 * time.Second,
+		},
 	})
 }

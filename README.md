@@ -110,12 +110,12 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 1. Then run it with:
 
 	```sh
-	#run app inside alpine linux (5MB linux distro)
-	docker run -d -v /path/on/docker/host/myapp/:/home/ -w /home/ alpine  -w /home/app
+	docker run -d -v /path/on/docker/host/myapp/:/home/ -w /home/ debian  -w /home/app
 	```
 
 1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
 1. `app` can use the current working directory as storage
+1. `debian` doesn't ship with TLS certs, you can mount them in with `-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt`
 
 ### Alternatives
 
@@ -124,8 +124,8 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### TODO
 
-* Github fetcher (given a repo)
-* S3 fetcher (given a bucket and credentials)
+* Log levels
+* Github fetcher (given a repo, poll releases)
 * etcd fetcher (given a cluster, watch key)
 * `overseer` CLI tool ([TODO](cmd/overseer/TODO.md))
 * `overseer` package

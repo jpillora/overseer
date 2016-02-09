@@ -2,4 +2,4 @@
 
 package overseer
 
-const supported = false
+var supported = false

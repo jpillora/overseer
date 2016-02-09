@@ -11,12 +11,13 @@ import (
 	"syscall"
 )
 
-const supported = true
-
 var (
-	SIGUSR1 = syscall.SIGUSR1
-	SIGUSR2 = syscall.SIGUSR2
-	SIGTERM = syscall.SIGTERM
+	supported = true
+	uid       = syscall.Getuid()
+	gid       = syscall.Getgid()
+	SIGUSR1   = syscall.SIGUSR1
+	SIGUSR2   = syscall.SIGUSR2
+	SIGTERM   = syscall.SIGTERM
 )
 
 func move(dst, src string) error {
