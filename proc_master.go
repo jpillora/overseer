@@ -91,10 +91,10 @@ func (mp *master) checkBinary() error {
 	mp.binHash = hash.Sum(nil)
 	f.Close()
 	//test bin<->tmpbin moves
-	if err := os.Rename(mp.binPath, tmpBinPath); err != nil {
+	if err := move(tmpBinPath, mp.binPath); err != nil {
 		return fmt.Errorf("cannot move binary (%s)", err)
 	}
-	if err := os.Rename(tmpBinPath, mp.binPath); err != nil {
+	if err := move(mp.binPath, tmpBinPath); err != nil {
 		return fmt.Errorf("cannot move binary back (%s)", err)
 	}
 	return nil
@@ -272,7 +272,7 @@ func (mp *master) fetch() {
 		return
 	}
 	//overwrite!
-	if err := os.Rename(tmpBinPath, mp.binPath); err != nil {
+	if err := move(mp.binPath, tmpBinPath); err != nil {
 		mp.logf("failed to overwrite binary: %s", err)
 		return
 	}

@@ -2,7 +2,7 @@
 
 [![GoDoc](https://godoc.org/github.com/jpillora/overseer?status.svg)](https://godoc.org/github.com/jpillora/overseer)
 
-Daemonizable self-upgrading binaries in Go (golang).
+Monitorable, gracefully restarting, self-upgrading binaries in Go (golang)
 
 The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers. The secondary goal is user simplicity. :warning: This is beta software.
 
@@ -19,7 +19,7 @@ The main goal of this project is to facilitate the creation of self-upgrading bi
 go get github.com/jpillora/overseer
 ```
 
-### Quick Usage
+### Quick example
 
 ``` go
 package main
@@ -34,8 +34,8 @@ import (
 	"github.com/jpillora/overseer/fetcher"
 )
 
-//convert your main() into a 'prog(state)' and then
-//create another main() to run the main process
+//create another main() to run the overseer process
+//and then convert your old main() into a 'prog(state)'
 func main() {
 	overseer.Run(overseer.Config{
 		Program: prog,
@@ -83,16 +83,50 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) says hello
 app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 ```
 
+### More examples
+
+* Only use graceful restarts
+
+	```go
+	func main() {
+		overseer.Run(overseer.Config{
+			Program: prog,
+			Address: ":3000",
+		})
+	}
+	```
+
+	Send `main` a `SIGUSR2` to manually trigger a restart
+
+* Only use auto-upgrades, no restarts
+
+	```go
+	func main() {
+		overseer.Run(overseer.Config{
+			Program: prog,
+			NoRestartAfterFetch: true
+			Fetcher: &fetcher.HTTP{
+				URL:      "http://localhost:4000/binaries/myapp",
+				Interval: 1 * time.Second,
+			},
+		})
+	}
+	```
+
+	Your binary will be upgraded though it will require manual restart from the user
+
 ### Warnings
 
-* Bind `Addresses` can only be changed by restarting the main process
-* Only supported on darwin and linux
+* Currently shells out to `mv` for moving files because `mv` handles cross-partition moves unlike `os.Rename`.
+* Bind `Addresses` can only be changed by restarting the main process.
+* Only supported on darwin and linux.
 
 ### Documentation
 
 * [Core `overseer` package](https://godoc.org/github.com/jpillora/overseer)
 * [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/overseer/fetcher#Interface)
-* [Basic `fetcher.HTTP` fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
+* [HTTP fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
+* [S3 fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
 
 ### Architecture overview
 
@@ -106,11 +140,11 @@ app#3 (286848c2aefcd3f7321a65b5e4efae987fb17911) exiting...
 
 ### Docker
 
-1. Compile your `overseer`able `app` to a `/path/on/docker/host/myapp/app`
+1. Compile your `overseer`able `app` to a `/path/on/docker/host/dir/app`
 1. Then run it with:
 
 	```sh
-	docker run -d -v /path/on/docker/host/myapp/:/home/ -w /home/ debian  -w /home/app
+	docker run -d -v /path/on/docker/host/dir/:/home/ -w /home/ debian  -w /home/app
 	```
 
 1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
