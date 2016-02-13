@@ -6,7 +6,7 @@ Monitorable, gracefully restarting, self-upgrading binaries in Go (golang)
 
 The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a simple API with reasonable defaults for maximum user enjoyment.
 
-:warning: *This is beta software. Do not use in production. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) as you encounter them.*
+:warning: *This is beta software. Do not use in production. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) you encounter.*
 
 ### Features
 
@@ -102,6 +102,8 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) exiting...
 	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) says hello
 	```
+
+	You'll notice `app#1` stays running until the last request is closed.
 
 * Only use graceful restarts
 
