@@ -22,7 +22,7 @@ var (
 
 func move(dst, src string) error {
 	//HACK: we're shelling out to mv because linux
-	//throws errors when we use Rename/Create a
-	//running binary.
+	//throws errors when crossing device boundaryes.
+	//TODO see sys_posix_mv.go
 	return exec.Command("mv", src, dst).Run()
 }

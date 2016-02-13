@@ -30,12 +30,12 @@ func prog(state overseer.State) {
 //'main()' is run in the initial process
 func main() {
 	overseer.Run(overseer.Config{
-		Log:     false, //display log of overseer actions
 		Program: prog,
 		Address: ":5001",
 		Fetcher: &fetcher.HTTP{
 			URL:      "http://localhost:5002/myappnew",
 			Interval: 1 * time.Second,
 		},
+		Debug: false, //display log of overseer actions
 	})
 }

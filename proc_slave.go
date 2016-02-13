@@ -1,6 +1,7 @@
 package overseer
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -44,51 +45,61 @@ type State struct {
 //a overseer slave process
 
 type slave struct {
-	Config
+	*Config
+	id         string
 	listeners  []*upListener
 	masterPid  int
 	masterProc *os.Process
 	state      State
 }
 
-func (sp *slave) run() {
+func (sp *slave) run() error {
+	sp.id = os.Getenv(envSlaveID)
+	sp.debugf("run")
 	sp.state.Enabled = true
 	sp.state.ID = os.Getenv(envBinID)
 	sp.state.StartedAt = time.Now()
 	sp.state.Address = sp.Config.Address
 	sp.state.Addresses = sp.Config.Addresses
 	sp.state.GracefulShutdown = make(chan bool, 1)
-	sp.watchParent()
-	sp.initFileDescriptors()
+	if err := sp.watchParent(); err != nil {
+		return err
+	}
+	if err := sp.initFileDescriptors(); err != nil {
+		return err
+	}
 	sp.watchSignal()
 	//run program with state
-	sp.logf("start program")
+	sp.debugf("start program")
 	sp.Config.Program(sp.state)
+	return nil
 }
 
-func (sp *slave) watchParent() {
+func (sp *slave) watchParent() error {
 	sp.masterPid = os.Getppid()
 	proc, err := os.FindProcess(sp.masterPid)
 	if err != nil {
-		fatalf("parent process %s", err)
+		return fmt.Errorf("master process: %s", err)
 	}
 	sp.masterProc = proc
 	go func() {
+		//send signal 0 to master process forever
 		for {
-			//sending signal 0 should not error as long as the process is alive
+			//should not error as long as the process is alive
 			if err := sp.masterProc.Signal(syscall.Signal(0)); err != nil {
 				os.Exit(1)
 			}
 			time.Sleep(2 * time.Second)
 		}
 	}()
+	return nil
 }
 
-func (sp *slave) initFileDescriptors() {
+func (sp *slave) initFileDescriptors() error {
 	//inspect file descriptors
 	numFDs, err := strconv.Atoi(os.Getenv(envNumFDs))
 	if err != nil {
-		fatalf("invalid %s integer", envNumFDs)
+		return fmt.Errorf("invalid %s integer", envNumFDs)
 	}
 	sp.listeners = make([]*upListener, numFDs)
 	sp.state.Listeners = make([]net.Listener, numFDs)
@@ -96,7 +107,7 @@ func (sp *slave) initFileDescriptors() {
 		f := os.NewFile(uintptr(3+i), "")
 		l, err := net.FileListener(f)
 		if err != nil {
-			fatalf("failed to inherit file descriptor: %d", i)
+			return fmt.Errorf("failed to inherit file descriptor: %d", i)
 		}
 		u := newUpListener(l)
 		sp.listeners[i] = u
@@ -105,6 +116,7 @@ func (sp *slave) initFileDescriptors() {
 	if len(sp.state.Listeners) > 0 {
 		sp.state.Listener = sp.state.Listeners[0]
 	}
+	return nil
 }
 
 func (sp *slave) watchSignal() {
@@ -113,7 +125,7 @@ func (sp *slave) watchSignal() {
 	go func() {
 		<-signals
 		signal.Stop(signals)
-		sp.logf("graceful shutdown requested")
+		sp.debugf("graceful shutdown requested")
 		//master wants to restart,
 		sp.state.GracefulShutdown <- true
 		//release any sockets and notify master
@@ -129,14 +141,20 @@ func (sp *slave) watchSignal() {
 		//start death-timer
 		go func() {
 			time.Sleep(sp.Config.TerminateTimeout)
-			sp.logf("timeout. forceful shutdown")
+			sp.debugf("timeout. forceful shutdown")
 			os.Exit(1)
 		}()
 	}()
 }
 
-func (sp *slave) logf(f string, args ...interface{}) {
-	if sp.Log {
-		log.Printf("[overseer slave] "+f, args...)
+func (sp *slave) debugf(f string, args ...interface{}) {
+	if sp.Config.Debug {
+		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
+	}
+}
+
+func (sp *slave) warnf(f string, args ...interface{}) {
+	if sp.Config.Debug || !sp.Config.NoWarn {
+		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
 	}
 }

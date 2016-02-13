@@ -25,7 +25,8 @@ var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
 
 //a overseer master process
 type master struct {
-	Config
+	*Config
+	slaveID             int
 	slaveCmd            *exec.Cmd
 	slaveExtraFiles     []*os.File
 	binPath, tmpBinPath string
@@ -40,30 +41,26 @@ type master struct {
 	signalledAt         time.Time
 }
 
-func (mp *master) run() {
+func (mp *master) run() error {
+	mp.debugf("run")
 	if err := mp.checkBinary(); err != nil {
-		if !mp.Config.Optional {
-			fatalf("%s", err)
-		}
-		//run program directly
-		mp.logf("%s, disabling overseer.", err)
-		mp.Program(DisabledState)
-		return
+		return err
 	}
 	if mp.Config.Fetcher != nil {
 		if err := mp.Config.Fetcher.Init(); err != nil {
-			mp.logf("fetcher init failed (%s)", err)
+			mp.warnf("fetcher init failed (%s). fetcher disabled.", err)
 			mp.Config.Fetcher = nil
 		}
 	}
 	mp.setupSignalling()
-	mp.retreiveFileDescriptors()
+	if err := mp.retreiveFileDescriptors(); err != nil {
+		return err
+	}
 	if mp.Config.Fetcher != nil {
-		//TODO is required? fatalf("overseer.Config.Fetcher required")
 		mp.fetch()
 		go mp.fetchLoop()
 	}
-	mp.forkLoop()
+	return mp.forkLoop()
 }
 
 func (mp *master) checkBinary() error {
@@ -119,58 +116,59 @@ func (mp *master) handleSignal(s os.Signal) {
 		//user initiated manual restart
 		mp.triggerRestart()
 	} else if s.String() == "child exited" {
-		// will occur on every restart
+		// will occur on every restart, ignore it
 	} else
 	//**during a restart** a SIGUSR1 signals
 	//to the master process that, the file
 	//descriptors have been released
 	if mp.awaitingUSR1 && s == SIGUSR1 {
-		mp.logf("signaled, sockets ready")
+		mp.debugf("signaled, sockets ready")
 		mp.awaitingUSR1 = false
 		mp.descriptorsReleased <- true
 	} else
 	//while the slave process is running, proxy
 	//all signals through
 	if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
-		mp.logf("proxy signal (%s)", s)
+		mp.debugf("proxy signal (%s)", s)
 		mp.sendSignal(s)
 	} else
 	//otherwise if not running, kill on CTRL+c
 	if s == os.Interrupt {
-		mp.logf("interupt with no slave")
+		mp.debugf("interupt with no slave")
 		os.Exit(1)
 	} else {
-		mp.logf("signal discarded (%s), no slave process", s)
+		mp.debugf("signal discarded (%s), no slave process", s)
 	}
 }
 
 func (mp *master) sendSignal(s os.Signal) {
 	if err := mp.slaveCmd.Process.Signal(s); err != nil {
-		mp.logf("signal failed (%s), assuming slave process died", err)
+		mp.debugf("signal failed (%s), assuming slave process died unexpectedly", err)
 		os.Exit(1)
 	}
 }
 
-func (mp *master) retreiveFileDescriptors() {
+func (mp *master) retreiveFileDescriptors() error {
 	mp.slaveExtraFiles = make([]*os.File, len(mp.Config.Addresses))
 	for i, addr := range mp.Config.Addresses {
 		a, err := net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
-			fatalf("invalid address: %s (%s)", addr, err)
+			return fmt.Errorf("Invalid address %s (%s)", addr, err)
 		}
 		l, err := net.ListenTCP("tcp", a)
 		if err != nil {
-			fatalf(err.Error())
+			return err
 		}
 		f, err := l.File()
 		if err != nil {
-			fatalf("failed to retreive fd for: %s (%s)", addr, err)
+			return fmt.Errorf("Failed to retreive fd for: %s (%s)", addr, err)
 		}
 		if err := l.Close(); err != nil {
-			fatalf("failed to close listener for: %s (%s)", addr, err)
+			return fmt.Errorf("Failed to close listener for: %s (%s)", addr, err)
 		}
 		mp.slaveExtraFiles[i] = f
 	}
+	return nil
 }
 
 //fetchLoop is run in a goroutine
@@ -180,6 +178,7 @@ func (mp *master) fetchLoop() {
 	for {
 		t0 := time.Now()
 		mp.fetch()
+		//duration fetch of fetch
 		diff := time.Now().Sub(t0)
 		if diff < min {
 			delay := min - diff
@@ -194,67 +193,66 @@ func (mp *master) fetch() {
 	if mp.restarting {
 		return //skip if restarting
 	}
-
-	mp.logf("checking for updates...")
+	mp.debugf("checking for updates...")
 	reader, err := mp.Fetcher.Fetch()
 	if err != nil {
-		mp.logf("failed to get latest version: %s", err)
+		mp.debugf("failed to get latest version: %s", err)
 		return
 	}
 	if reader == nil {
-		mp.logf("no updates")
+		mp.debugf("no updates")
 		return //fetcher has explicitly said there are no updates
 	}
-	mp.logf("streaming update...")
+	mp.debugf("streaming update...")
 	//optional closer
 	if closer, ok := reader.(io.Closer); ok {
 		defer closer.Close()
 	}
 	tmpBin, err := os.OpenFile(tmpBinPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
-		mp.logf("failed to open temp binary: %s", err)
+		mp.warnf("failed to open temp binary: %s", err)
 		return
 	}
-	// defer func() {
-	// 	tmpBin.Close()
-	// 	os.Remove(tmpBinPath)
-	// }()
+	defer func() {
+		tmpBin.Close()
+		os.Remove(tmpBinPath)
+	}()
 	//tee off to sha1
 	hash := sha1.New()
 	reader = io.TeeReader(reader, hash)
 	//write to a temp file
 	_, err = io.Copy(tmpBin, reader)
 	if err != nil {
-		mp.logf("failed to write temp binary: %s", err)
+		mp.warnf("failed to write temp binary: %s", err)
 		return
 	}
 	//compare hash
 	newHash := hash.Sum(nil)
 	if bytes.Equal(mp.binHash, newHash) {
-		mp.logf("hash match - skip")
+		mp.debugf("hash match - skip")
 		return
 	}
 	//copy permissions
 	if err := tmpBin.Chmod(mp.binPerms); err != nil {
-		mp.logf("failed to make temp binary executable: %s", err)
+		mp.warnf("failed to make temp binary executable: %s", err)
 		return
 	}
 	if err := tmpBin.Chown(uid, gid); err != nil {
-		mp.logf("failed to change owner of binary: %s", err)
+		mp.warnf("failed to change owner of binary: %s", err)
 		return
 	}
 	if _, err := tmpBin.Stat(); err != nil {
-		mp.logf("failed to stat temp binary: %s", err)
+		mp.warnf("failed to stat temp binary: %s", err)
 		return
 	}
 	tmpBin.Close()
 	if _, err := os.Stat(tmpBinPath); err != nil {
-		mp.logf("failed to stat temp binary by path: %s", err)
+		mp.warnf("failed to stat temp binary by path: %s", err)
 		return
 	}
 	if mp.Config.PreUpgrade != nil {
 		if err := mp.Config.PreUpgrade(tmpBinPath); err != nil {
-			mp.logf("user cancelled upgrade: %s", err)
+			mp.warnf("user cancelled upgrade: %s", err)
 			return
 		}
 	}
@@ -264,19 +262,19 @@ func (mp *master) fetch() {
 	cmd.Env = []string{envBinCheck + "=" + tokenIn}
 	tokenOut, err := cmd.Output()
 	if err != nil {
-		mp.logf("failed to run temp binary: %s", err)
+		mp.warnf("failed to run temp binary: %s", err)
 		return
 	}
 	if tokenIn != string(tokenOut) {
-		mp.logf("sanity check failed")
+		mp.warnf("sanity check failed")
 		return
 	}
 	//overwrite!
 	if err := move(mp.binPath, tmpBinPath); err != nil {
-		mp.logf("failed to overwrite binary: %s", err)
+		mp.warnf("failed to overwrite binary: %s", err)
 		return
 	}
-	mp.logf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
+	mp.debugf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
 	mp.binHash = newHash
 	//binary successfully replaced
 	if !mp.Config.NoRestartAfterFetch {
@@ -288,13 +286,13 @@ func (mp *master) fetch() {
 
 func (mp *master) triggerRestart() {
 	if mp.restarting {
-		mp.logf("already graceful restarting")
+		mp.debugf("already graceful restarting")
 		return //skip
 	} else if mp.slaveCmd == nil || mp.restarting {
-		mp.logf("no slave process")
+		mp.debugf("no slave process")
 		return //skip
 	}
-	mp.logf("graceful restart triggered")
+	mp.debugf("graceful restart triggered")
 	mp.restarting = true
 	mp.awaitingUSR1 = true
 	mp.signalledAt = time.Now()
@@ -302,31 +300,37 @@ func (mp *master) triggerRestart() {
 	select {
 	case <-mp.restarted:
 		//success
-		mp.logf("restart success")
+		mp.debugf("restart success")
 	case <-time.After(mp.TerminateTimeout):
-		//times up process, we did ask nicely!
-		mp.logf("graceful timeout, forcing exit")
+		//times up mr. process, we did ask nicely!
+		mp.debugf("graceful timeout, forcing exit")
 		mp.sendSignal(os.Kill)
 	}
 }
 
 //not a real fork
-func (mp *master) forkLoop() {
+func (mp *master) forkLoop() error {
 	//loop, restart command
 	for {
-		mp.fork()
+		if err := mp.fork(); err != nil {
+			return err
+		}
 	}
 }
 
-func (mp *master) fork() {
-	mp.logf("starting %s", mp.binPath)
+func (mp *master) fork() error {
+	mp.debugf("starting %s", mp.binPath)
 	cmd := exec.Command(mp.binPath)
+	//mark this new process as the "active" slave process.
+	//this process is assumed to be holding the socket files.
 	mp.slaveCmd = cmd
-
+	mp.slaveID++
+	//provide the slave process with some state
 	e := os.Environ()
 	e = append(e, envBinID+"="+hex.EncodeToString(mp.binHash))
+	e = append(e, envSlaveID+"="+strconv.Itoa(mp.slaveID))
 	e = append(e, envIsSlave+"=1")
-	e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.Config.Addresses)))
+	e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.slaveExtraFiles)))
 	cmd.Env = e
 	//inherit master args/stdfiles
 	cmd.Args = os.Args
@@ -336,8 +340,9 @@ func (mp *master) fork() {
 	//include socket files
 	cmd.ExtraFiles = mp.slaveExtraFiles
 	if err := cmd.Start(); err != nil {
-		fatalf("failed to fork: %s", err)
+		return fmt.Errorf("Failed to start slave process: %s", err)
 	}
+	//was scheduled to restart, notify success
 	if mp.restarting {
 		mp.restartedAt = time.Now()
 		mp.restarting = false
@@ -352,10 +357,6 @@ func (mp *master) fork() {
 	select {
 	case err := <-cmdwait:
 		//program exited before releasing descriptors
-		if mp.restarting {
-			//restart requested
-			return
-		}
 		//proxy exit code out to master
 		code := 0
 		if err != nil {
@@ -366,20 +367,32 @@ func (mp *master) fork() {
 				}
 			}
 		}
-		mp.logf("prog exited with %d", code)
-		//proxy exit with same code
-		os.Exit(code)
+		mp.debugf("prog exited with %d", code)
+		//if a restart wasn't requested, proxy
+		//through the exit code via the main process
+		if !mp.restarting {
+			os.Exit(code)
+		}
 	case <-mp.descriptorsReleased:
 		//if descriptors are released, the program
 		//has yielded control of its sockets and
-		//a new instance should be started to pick
-		//them up. The previous cmd.Wait() will still
-		//be consumed though it will be discarded.
+		//a parallel instance of the program can be
+		//started safely. it should serve state.Listeners
+		//to ensure downtime is kept at <1sec. The previous
+		//cmd.Wait() will still be consumed though the
+		//result will be discarded.
+	}
+	return nil
+}
+
+func (mp *master) debugf(f string, args ...interface{}) {
+	if mp.Config.Debug {
+		log.Printf("[overseer master] "+f, args...)
 	}
 }
 
-func (mp *master) logf(f string, args ...interface{}) {
-	if mp.Log {
+func (mp *master) warnf(f string, args ...interface{}) {
+	if mp.Config.Debug || !mp.Config.NoWarn {
 		log.Printf("[overseer master] "+f, args...)
 	}
 }

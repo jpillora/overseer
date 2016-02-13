@@ -2,6 +2,7 @@
 package overseer
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 )
 
 const (
+	envSlaveID  = "GO_UPGRADE_SLAVE_ID"
 	envIsSlave  = "GO_UPGRADE_IS_SLAVE"
 	envNumFDs   = "GO_UPGRADE_NUM_FDS"
 	envBinID    = "GO_UPGRADE_BIN_ID"
@@ -19,9 +21,9 @@ const (
 )
 
 type Config struct {
-	//Optional allows overseer to fallback to running
-	//running the program in the main process.
-	Optional bool
+	//Required will prevent overseer from fallback to running
+	//running the program in the main process on failure.
+	Required bool
 	//Program's main function
 	Program func(state State)
 	//Program's zero-downtime socket listening address (set this or Addresses)
@@ -41,31 +43,24 @@ type Config struct {
 	//PreUpgrade runs after a binary has been retreived, user defined checks
 	//can be run here and returning an error will cancel the upgrade.
 	PreUpgrade func(tempBinaryPath string) error
-	//Log enables [overseer] logs to be sent to stdout.
-	Log bool
+	//Debug enables all [overseer] logs.
+	Debug bool
+	//NoWarn disables warning [overseer] logs.
+	NoWarn bool
 	//NoRestartAfterFetch disables automatic restarts after each upgrade.
 	NoRestartAfterFetch bool
 	//Fetcher will be used to fetch binaries.
 	Fetcher fetcher.Interface
 }
 
-func fatalf(f string, args ...interface{}) {
-	log.Fatalf("[overseer] "+f, args...)
-}
-
-func Run(c Config) {
-	//sanity check
-	if token := os.Getenv(envBinCheck); token != "" {
-		fmt.Fprint(os.Stdout, token)
-		os.Exit(0)
-	}
+func validate(c *Config) error {
 	//validate
 	if c.Program == nil {
-		fatalf("overseer.Config.Program required")
+		return errors.New("overseer.Config.Program required")
 	}
 	if c.Address != "" {
 		if len(c.Addresses) > 0 {
-			fatalf("overseer.Config.Address and Addresses cant both be set")
+			return errors.New("overseer.Config.Address and Addresses cant both be set")
 		}
 		c.Addresses = []string{c.Address}
 	} else if len(c.Addresses) > 0 {
@@ -74,28 +69,57 @@ func Run(c Config) {
 	if c.RestartSignal == nil {
 		c.RestartSignal = SIGUSR2
 	}
-	if c.TerminateTimeout == 0 {
+	if c.TerminateTimeout <= 0 {
 		c.TerminateTimeout = 30 * time.Second
 	}
-	if c.MinFetchInterval == 0 {
+	if c.MinFetchInterval <= 0 {
 		c.MinFetchInterval = 1 * time.Second
 	}
-	//os not supported
-	if !supported {
-		if !c.Optional {
-			fatalf("os (%s) not supported", runtime.GOOS)
+	return nil
+}
+
+//RunErr allows manual handling of any
+//overseer errors.
+func RunErr(c Config) error {
+	return runErr(&c)
+}
+
+//Run executes overseer, if an error is
+//encounted, overseer fallsback to running
+//the program directly (unless Required is set).
+func Run(c Config) {
+	err := runErr(&c)
+	if err != nil {
+		if c.Required {
+			log.Fatalf("[overseer] %s", err)
+		} else if c.Debug || !c.NoWarn {
+			log.Printf("[overseer] disabled. run failed: %s", err)
 		}
 		c.Program(DisabledState)
 		return
 	}
+	os.Exit(0)
+}
+
+func runErr(c *Config) error {
+	if err := validate(c); err != nil {
+		return err
+	}
+	//sanity check
+	if token := os.Getenv(envBinCheck); token != "" {
+		fmt.Fprint(os.Stdout, token)
+		return nil
+	}
+	//os not supported
+	if !supported {
+		return fmt.Errorf("os (%s) not supported", runtime.GOOS)
+	}
 	//run either in master or slave mode
 	if os.Getenv(envIsSlave) == "1" {
 		sp := slave{Config: c}
-		sp.logf("run")
-		sp.run()
+		return sp.run()
 	} else {
 		mp := master{Config: c}
-		mp.logf("run")
-		mp.run()
+		return mp.run()
 	}
 }
