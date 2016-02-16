@@ -2,11 +2,9 @@
 
 [![GoDoc](https://godoc.org/github.com/jpillora/overseer?status.svg)](https://godoc.org/github.com/jpillora/overseer)
 
-Monitorable, gracefully restarting, self-upgrading binaries in Go (golang)
+`overseer` is a library for creating monitorable, gracefully restarting, self-upgrading binaries in Go (golang). The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a simple API with reasonable defaults.
 
-The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a simple API with reasonable defaults for maximum user enjoyment.
-
-:warning: *This is beta software. Do not use in production. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) you encounter.*
+:warning: *This is beta software. Do not use this in production yet. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) you encounter.*
 
 ### Features
 
@@ -61,7 +59,7 @@ func prog(state overseer.State) {
 }
 ```
 
-**How it works**
+**How it works:**
 
 * `overseer` uses the main process to check for and install upgrades and a child process to run `Program`.
 * The main process retrieves the files of the listeners described by `Address/es`.
@@ -105,7 +103,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 	You'll notice `app#1` stays running until the last request is closed.
 
-* Only use graceful restarts
+* Only use graceful restarts:
 
 	```go
 	func main() {
@@ -138,8 +136,8 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 ### Known issues
 
 * The master process's `overseer.Config` cannot be changed via an upgrade, the master process must be restarted.
+	* Therefore, `Addresses` can only be changed by restarting the main process.
 * Currently shells out to `mv` for moving files because `mv` handles cross-partition moves unlike `os.Rename`.
-* `Addresses` can only be changed by restarting the main process.
 * Only supported on darwin and linux.
 
 ### More documentation
@@ -165,13 +163,17 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 ### TODO
 
 * Tests! The test suite should drive an:
- 	* HTTP client for application version/uptime testing
-	* HTTP server for application upgrades
-	* `overseer` binary process
-* HTTP fetcher long-polling
-* SCP fetcher (connect to a server, poll path)
-* Github fetcher (given a repo, poll releases)
-* etcd fetcher (given a cluster, watch key)
+ 	* HTTP client for verifying application version
+	* HTTP server for providing application upgrades
+	* an `overseer` process via `exec.Cmd`
+* Slave process should pass new config back to master to:
+	* Update logging settings
+	* Update socket bindings
+* Fetchers
+	* HTTP fetcher long-polling (pseduo-push)
+	* SCP fetcher (connect to a server, poll path)
+	* Github fetcher (given a repo, poll releases)
+	* etcd fetcher (given a cluster, watch key)
 * `overseer` CLI tool ([TODO](cmd/overseer/TODO.md))
 * `overseer` package
 	* Execute and verify calculated delta updates with https://github.com/kr/binarydist
