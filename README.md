@@ -4,6 +4,10 @@
 
 `overseer` is a library for creating monitorable, gracefully restarting, self-upgrading binaries in Go (golang). The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a simple API with reasonable defaults.
 
+![overseer diagram](https://docs.google.com/drawings/d/1o12njYyRILy3UDs2E6JzyJEl0psU4ePYiMQ20jiuVOY/pub?w=566&h=284)
+
+Commonly, graceful restarts are performed by the active process (*dark blue*) closing its listeners and passing these matching listening socket files (*green*) over to a newly started process. This restart causes any **foreground** process monitoring to incorrectly detect a program crash. `overseer` attempts to solve this by using a small process to perform this socket file exchange and proxying signals and exit code from the active process.
+
 :warning: *This is beta software. Do not use this in production yet. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) you encounter.*
 
 ### Features
@@ -69,7 +73,7 @@ func prog(state overseer.State) {
 * `Fetcher` runs in a goroutine and checks for updates at preconfigured interval. When `Fetcher` returns a valid binary stream (`io.Reader`), the master process saves it to a temporary location, verifies it, replaces the current binary and initiates a graceful restart.
 * The `fetcher.HTTP` accepts a `URL`, it polls this URL with HEAD requests and until it detects a change. On change, we `GET` the `URL` and stream it back out to `overseer`. See also `fetcher.S3`.
 * Once a binary is received, it is run with a simple echo token to confirm it is a `overseer` binary.
-* Except for scheduled upgrades, the child process exiting will cause the main process to exit with the same code. So, **`overseer` is not a process manager**.
+* Except for scheduled restarts, the active child process exiting will cause the main process to exit with the same code. So, **`overseer` is not a process manager**.
 
 See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration options [here](https://godoc.org/github.com/jpillora/overseer#Config) and the runtime [State](https://godoc.org/github.com/jpillora/overseer#State) available to your program [here](https://godoc.org/github.com/jpillora/overseer#State).
 
@@ -101,7 +105,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) says hello
 	```
 
-	You'll notice `app#1` stays running until the last request is closed.
+	**Note:** `app#1` stays running until the last request is closed.
 
 * Only use graceful restarts:
 
