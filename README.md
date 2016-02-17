@@ -126,7 +126,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	func main() {
 		overseer.Run(overseer.Config{
 			Program: prog,
-			NoRestartAfterFetch: true
+			NoRestart: true,
 			Fetcher: &fetcher.HTTP{
 				URL:      "http://localhost:4000/binaries/myapp",
 				Interval: 1 * time.Second,

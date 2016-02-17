@@ -368,9 +368,10 @@ func (mp *master) fork() error {
 			}
 		}
 		mp.debugf("prog exited with %d", code)
-		//if a restart wasn't requested, proxy
-		//through the exit code via the main process
-		if !mp.restarting {
+		//if a restarts are disabled or if it was an
+		//unexpected creash, proxy this exit straight
+		//through to the main process
+		if mp.NoRestart || !mp.restarting {
 			os.Exit(code)
 		}
 	case <-mp.descriptorsReleased:

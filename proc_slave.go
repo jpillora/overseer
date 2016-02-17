@@ -127,15 +127,19 @@ func (sp *slave) watchSignal() {
 		signal.Stop(signals)
 		sp.debugf("graceful shutdown requested")
 		//master wants to restart,
-		sp.state.GracefulShutdown <- true
+		close(sp.state.GracefulShutdown)
 		//release any sockets and notify master
 		if len(sp.listeners) > 0 {
 			//perform graceful shutdown
 			for _, l := range sp.listeners {
 				l.release(sp.Config.TerminateTimeout)
 			}
-			//signal release of held sockets
-			sp.masterProc.Signal(SIGUSR1)
+			//signal release of held sockets, allows master to start
+			//a new process before this child has actually exited.
+			//early restarts not supported with restarts disabled.
+			if !sp.NoRestart {
+				sp.masterProc.Signal(SIGUSR1)
+			}
 			//listeners should be waiting on connections to close...
 		}
 		//start death-timer

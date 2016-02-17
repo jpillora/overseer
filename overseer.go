@@ -47,7 +47,11 @@ type Config struct {
 	Debug bool
 	//NoWarn disables warning [overseer] logs.
 	NoWarn bool
+	//NoRestart disables all restarts, this option essentially converts
+	//the RestartSignal into a "ShutdownSignal".
+	NoRestart bool
 	//NoRestartAfterFetch disables automatic restarts after each upgrade.
+	//Though manual restarts using the RestartSignal can still be performed.
 	NoRestartAfterFetch bool
 	//Fetcher will be used to fetch binaries.
 	Fetcher fetcher.Interface
