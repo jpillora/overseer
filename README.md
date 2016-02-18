@@ -143,6 +143,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	* Therefore, `Addresses` can only be changed by restarting the main process.
 * Currently shells out to `mv` for moving files because `mv` handles cross-partition moves unlike `os.Rename`.
 * Only supported on darwin and linux.
+* Package `init()` functions will run twice on start, once in the main process and once in the child process.
 
 ### More documentation
 
@@ -170,7 +171,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
  	* HTTP client for verifying application version
 	* HTTP server for providing application upgrades
 	* an `overseer` process via `exec.Cmd`
-* Slave process should pass new config back to master to:
+* Child process should pass new config back to the main process and:
 	* Update logging settings
 	* Update socket bindings
 * Fetchers
