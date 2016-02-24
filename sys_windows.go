@@ -1,4 +1,4 @@
-// +build linux darwin posix
+// +build windows
 
 package overseer
 
@@ -12,17 +12,16 @@ import (
 )
 
 var (
-	supported = true
-	uid       = syscall.Getuid()
-	gid       = syscall.Getgid()
-	SIGUSR1   = syscall.SIGUSR1
-	SIGUSR2   = syscall.SIGUSR2
-	SIGTERM   = syscall.SIGTERM
+	uid     = syscall.Getuid()
+	gid     = syscall.Getgid()
+	SIGUSR1 = syscall.SIGTERM
+	SIGUSR2 = syscall.SIGTERM
+	SIGTERM = syscall.SIGTERM
 )
 
 func move(dst, src string) error {
 	//HACK: we're shelling out to mv because linux
 	//throws errors when crossing device boundaryes.
 	//TODO see sys_posix_mv.go
-	return exec.Command("mv", src, dst).Run()
+	return exec.Command("rename", src, dst).Run()
 }
