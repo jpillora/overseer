@@ -51,7 +51,7 @@ In general New fetchers should go in their own repos which can be linked to from
     ["overseer-delta-upgrade" 22 bytes][(l)ength-of-config 4 bytes][JSON config l bytes][binary delta]
     ```
 
-    The CLI would produce these delta upgrades and any fetcher could return one as a binary stream. Overseer just checks for the `"overseer-delta-upgrade"` string. The benefit of implementing this in overseer core is all fetchers would inherit this implicitly inherit this functionality.
+    The CLI would produce these delta upgrades and any fetcher could return one as a binary stream. Overseer just checks for the `"overseer-delta-upgrade"` string. The benefit of implementing this in overseer core is all fetchers would implicitly inherit this functionality.
 * In **both** cases, each will need to ship with a corresponding CLI tool, this tool:
   * Must calculate and create delta updates using [binarydist](https://github.com/kr/binarydist)
     * [Courgette](http://dev.chromium.org/developers/design-documents/software-updates-courgette) would be better though not sure about Go compatibility
