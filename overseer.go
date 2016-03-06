@@ -105,6 +105,11 @@ func Run(c Config) {
 	os.Exit(0)
 }
 
+var currentProcess interface {
+	triggerRestart()
+	run() error
+}
+
 func runErr(c *Config) error {
 	if err := validate(c); err != nil {
 		return err
@@ -120,10 +125,22 @@ func runErr(c *Config) error {
 	}
 	//run either in master or slave mode
 	if os.Getenv(envIsSlave) == "1" {
-		sp := slave{Config: c}
-		return sp.run()
+		currentProcess = &slave{Config: c}
 	} else {
-		mp := master{Config: c}
-		return mp.run()
+		currentProcess = &master{Config: c}
 	}
+	return currentProcess.run()
+}
+
+//Restart programmatically triggers a graceful restart. If NoRestart
+//is enabled, then this will essentially be a graceful shutdown.
+func Restart() {
+	if currentProcess != nil {
+		currentProcess.triggerRestart()
+	}
+}
+
+//IsSupported returns whether overseer is supported on the current OS.
+func IsSupported() bool {
+	return supported
 }

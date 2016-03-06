@@ -151,6 +151,12 @@ func (sp *slave) watchSignal() {
 	}()
 }
 
+func (sp *slave) triggerRestart() {
+	if err := sp.masterProc.Signal(sp.Config.RestartSignal); err != nil {
+		os.Exit(1)
+	}
+}
+
 func (sp *slave) debugf(f string, args ...interface{}) {
 	if sp.Config.Debug {
 		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)

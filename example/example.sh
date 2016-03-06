@@ -45,6 +45,8 @@ curl localhost:5001
 sleep 1
 curl localhost:5001
 
+sleep 1
+
 #end demo - cleanup
 kill $SERVEPID
 kill $APPPID
