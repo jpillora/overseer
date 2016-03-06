@@ -56,8 +56,9 @@ In general New fetchers should go in their own repos which can be linked to from
   * Must calculate and create delta updates using [binarydist](https://github.com/kr/binarydist)
     * [Courgette](http://dev.chromium.org/developers/design-documents/software-updates-courgette) would be better though not sure about Go compatibility
   * Optionally sign binaries
-      * Create signing ECDSA private and private key, store locally
-      * Build binaries and include public key with
+      * Create signing ECDSA private and private key
+      * Store public and private keys on the build machine
+      * Embed public keys into the binaries with
 
         ```
         -ldflags "-X github.com/jpillora/overseer/fetcher.PublicKey=A" -o myapp
