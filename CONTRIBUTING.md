@@ -29,7 +29,7 @@ Child process should pass new config back to the main process and:
 
 ## Extra Features
 
-**Below is a list of **optional extras** which would be nice to have.** Optional is emphasised here because this project aims to maintain its small API surface.
+Below is a list of **optional extras** which would be nice to have. Optional is emphasised here because this project aims to maintain its small API surface.
 
 ### More fetchers
 
