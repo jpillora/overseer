@@ -2,13 +2,13 @@
 
 [![GoDoc](https://godoc.org/github.com/jpillora/overseer?status.svg)](https://godoc.org/github.com/jpillora/overseer)
 
-`overseer` is a library for creating monitorable, gracefully restarting, self-upgrading binaries in Go (golang). The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a simple API with reasonable defaults.
+`overseer` is a package for creating monitorable, gracefully restarting, self-upgrading binaries in Go (golang). The main goal of this project is to facilitate the creation of self-upgrading binaries which play nice with standard process managers, secondly it should expose a small and simple API with reasonable defaults.
 
 ![overseer diagram](https://docs.google.com/drawings/d/1o12njYyRILy3UDs2E6JzyJEl0psU4ePYiMQ20jiuVOY/pub?w=566&h=284)
 
 Commonly, graceful restarts are performed by the active process (*dark blue*) closing its listeners and passing these matching listening socket files (*green*) over to a newly started process. This restart causes any **foreground** process monitoring to incorrectly detect a program crash. `overseer` attempts to solve this by using a small process to perform this socket file exchange and proxying signals and exit code from the active process.
 
-:warning: *This is beta software. Do not use this in production yet. Consider the API unstable. Please report any [issues](https://github.com/jpillora/overseer) you encounter.*
+:warning: *This is beta software. Be wary of using in production. Please report any [issues](https://github.com/jpillora/overseer/issues) you encounter.*
 
 ### Features
 
@@ -149,8 +149,8 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 * [Core `overseer` package](https://godoc.org/github.com/jpillora/overseer)
 * [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/overseer/fetcher#Interface)
-* [HTTP fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
-* [S3 fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
+	* [HTTP fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
+	* [S3 fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
 
 ### Docker
 
@@ -158,28 +158,14 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 1. Then run it with:
 
 	```sh
-	docker run -d -v /path/on/docker/host/dir/:/home/ -w /home/ debian  -w /home/app
+	#run the app inside a standard Debian container
+	docker run -d -v /path/on/docker/host/dir/:/home/ -w /home/ debian /home/app
 	```
 
 1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
 1. `app` can use the current working directory as storage
 1. If the OS doesn't ship with TLS certs, you can mount them from the host with `-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt`
 
-### TODO
+### Contributing
 
-* Tests! The test suite should drive an:
- 	* HTTP client for verifying application version
-	* HTTP server for providing application upgrades
-	* an `overseer` process via `exec.Cmd`
-* Child process should pass new config back to the main process and:
-	* Update logging settings
-	* Update socket bindings
-* Fetchers
-	* HTTP fetcher long-polling (pseduo-push)
-	* SCP fetcher (connect to a server, poll path)
-	* Github fetcher (given a repo, poll releases)
-	* etcd fetcher (given a cluster, watch key)
-* `overseer` CLI tool ([TODO](cmd/overseer/TODO.md))
-* `overseer` package
-	* Execute and verify calculated delta updates with https://github.com/kr/binarydist
-	* [Omaha](https://coreos.com/docs/coreupdate/custom-apps/coreupdate-protocol/) client support
+See [CONTRIBUTING.md](CONTRIBUTING.md)
