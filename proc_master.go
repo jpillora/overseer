@@ -328,6 +328,7 @@ func (mp *master) fork() error {
 	//provide the slave process with some state
 	e := os.Environ()
 	e = append(e, envBinID+"="+hex.EncodeToString(mp.binHash))
+	e = append(e, envBinPath+"="+mp.binPath)
 	e = append(e, envSlaveID+"="+strconv.Itoa(mp.slaveID))
 	e = append(e, envIsSlave+"=1")
 	e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.slaveExtraFiles)))

@@ -40,6 +40,8 @@ type State struct {
 	//GracefulShutdown will be filled when its time to perform
 	//a graceful shutdown.
 	GracefulShutdown chan bool
+	//Path of the binary currently being executed
+	BinPath string
 }
 
 //a overseer slave process
@@ -62,6 +64,7 @@ func (sp *slave) run() error {
 	sp.state.Address = sp.Config.Address
 	sp.state.Addresses = sp.Config.Addresses
 	sp.state.GracefulShutdown = make(chan bool, 1)
+	sp.state.BinPath = os.Getenv(envBinPath)
 	if err := sp.watchParent(); err != nil {
 		return err
 	}

@@ -137,6 +137,20 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 	Your binary will be upgraded though it will require manual restart from the user, suitable for creating self-upgrading command-line applications.
 
+* Multi-platform binaries using a dynamic fetch `URL`
+
+	```go
+	func main() {
+		overseer.Run(overseer.Config{
+			Program: prog,
+			Fetcher: &fetcher.HTTP{
+				URL: "http://localhost:4000/binaries/app-"+runtime.GOOS+"-"+runtime.GOARCH,
+				//e.g.http://localhost:4000/binaries/app-linux-amd64
+			},
+		})
+	}
+	```
+
 ### Known issues
 
 * The master process's `overseer.Config` cannot be changed via an upgrade, the master process must be restarted.

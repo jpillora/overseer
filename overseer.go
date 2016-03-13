@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	envSlaveID  = "GO_UPGRADE_SLAVE_ID"
-	envIsSlave  = "GO_UPGRADE_IS_SLAVE"
-	envNumFDs   = "GO_UPGRADE_NUM_FDS"
-	envBinID    = "GO_UPGRADE_BIN_ID"
-	envBinCheck = "GO_UPGRADE_BIN_CHECK"
+	envSlaveID  = "OVERSEER_SLAVE_ID"
+	envIsSlave  = "OVERSEER_IS_SLAVE"
+	envNumFDs   = "OVERSEER_NUM_FDS"
+	envBinID    = "OVERSEER_BIN_ID"
+	envBinPath  = "OVERSEER_BIN_PATH"
+	envBinCheck = "OVERSEER_BIN_CHECK"
 )
 
 type Config struct {
