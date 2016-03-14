@@ -13,12 +13,13 @@ import (
 )
 
 const (
-	envSlaveID  = "OVERSEER_SLAVE_ID"
-	envIsSlave  = "OVERSEER_IS_SLAVE"
-	envNumFDs   = "OVERSEER_NUM_FDS"
-	envBinID    = "OVERSEER_BIN_ID"
-	envBinPath  = "OVERSEER_BIN_PATH"
-	envBinCheck = "OVERSEER_BIN_CHECK"
+	envSlaveID        = "OVERSEER_SLAVE_ID"
+	envIsSlave        = "OVERSEER_IS_SLAVE"
+	envNumFDs         = "OVERSEER_NUM_FDS"
+	envBinID          = "OVERSEER_BIN_ID"
+	envBinPath        = "OVERSEER_BIN_PATH"
+	envBinCheck       = "OVERSEER_BIN_CHECK"
+	envBinCheckLegacy = "GO_UPGRADE_BIN_CHECK"
 )
 
 type Config struct {
@@ -117,6 +118,11 @@ func runErr(c *Config) error {
 	}
 	//sanity check
 	if token := os.Getenv(envBinCheck); token != "" {
+		fmt.Fprint(os.Stdout, token)
+		return nil
+	}
+	//legacy sanity check using old env var
+	if token := os.Getenv(envBinCheckLegacy); token != "" {
 		fmt.Fprint(os.Stdout, token)
 		return nil
 	}
