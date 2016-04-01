@@ -233,11 +233,11 @@ func (mp *master) fetch() {
 		return
 	}
 	//copy permissions
-	if err := tmpBin.Chmod(mp.binPerms); err != nil {
+	if err := chmod(tmpBin, mp.binPerms); err != nil {
 		mp.warnf("failed to make temp binary executable: %s", err)
 		return
 	}
-	if err := tmpBin.Chown(uid, gid); err != nil {
+	if err := chown(tmpBin, uid, gid); err != nil {
 		mp.warnf("failed to change owner of binary: %s", err)
 		return
 	}

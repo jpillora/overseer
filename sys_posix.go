@@ -7,6 +7,7 @@ package overseer
 //in some other way on other OSs... TODO!
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -21,8 +22,18 @@ var (
 )
 
 func move(dst, src string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
 	//HACK: we're shelling out to mv because linux
 	//throws errors when crossing device boundaryes.
 	//TODO see sys_posix_mv.go
 	return exec.Command("mv", src, dst).Run()
+}
+
+func chmod(f *os.File, perms os.FileMode) error {
+	return f.Chmod(perms)
+}
+func chown(f *os.File, uid, gid int) error {
+	return f.Chown(uid, gid)
 }
