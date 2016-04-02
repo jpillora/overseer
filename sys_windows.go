@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -36,11 +37,15 @@ func move(dst, src string) error {
 }
 
 func chmod(f *os.File, perms os.FileMode) error {
-	_ = f.Chmod(perms)
+	if err := f.Chmod(perms); err != nil && !strings.Contains(err.Error(), "not supported") {
+		return err
+	}
 	return nil
 }
 
 func chown(f *os.File, uid, gid int) error {
-	_ = f.Chown(uid, gid)
+	if err := f.Chown(uid, gid); err != nil && !strings.Contains(err.Error(), "not supported") {
+		return err
+	}
 	return nil
 }
