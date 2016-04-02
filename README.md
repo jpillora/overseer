@@ -166,6 +166,10 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	* [HTTP fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
 	* [S3 fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
 
+### Third-party Fetchers
+
+* [overseer-bindiff](https://github.com/tgulacsi/overseer-bindiff) A binary diff fetcher and builder
+
 ### Docker
 
 1. Compile your `overseer`able `app` to a `/path/on/docker/host/dir/app`
