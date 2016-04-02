@@ -1,4 +1,4 @@
-// +build !linux,!darwin
+// +build !linux,!darwin,!windows
 
 package overseer
 
@@ -17,5 +17,13 @@ var (
 )
 
 func move(dst, src string) error {
+	return errors.New("Not supported")
+}
+
+func chmod(f *os.File, perms os.FileMode) error {
+	return errors.New("Not supported")
+}
+
+func chown(f *os.File, uid, gid int) error {
 	return errors.New("Not supported")
 }
