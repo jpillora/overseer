@@ -8,7 +8,7 @@
 
 Commonly, graceful restarts are performed by the active process (*dark blue*) closing its listeners and passing these matching listening socket files (*green*) over to a newly started process. This restart causes any **foreground** process monitoring to incorrectly detect a program crash. `overseer` attempts to solve this by using a small process to perform this socket file exchange and proxying signals and exit code from the active process.
 
-:warning: *This is beta software. Be wary of using in production. Please report any [issues](https://github.com/jpillora/overseer/issues) you encounter.*
+:warning: *`overseer` is being used heavily at my workplace and no major issues have yet to be found. Nevertheless, consider it beta software and please report any [issues](https://github.com/jpillora/overseer/issues) you encounter.*
 
 ### Features
 
@@ -181,7 +181,7 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 	```
 
 1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
-1. `app` can use the current working directory as storage
+1. `app` should mount its parent directory as a volume in order to store the latest binaries on the host
 1. If the OS doesn't ship with TLS certs, you can mount them from the host with `-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt`
 
 ### Contributing

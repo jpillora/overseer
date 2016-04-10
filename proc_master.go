@@ -39,6 +39,7 @@ type master struct {
 	awaitingUSR1        bool
 	descriptorsReleased chan bool
 	signalledAt         time.Time
+	printCheckUpdate    bool
 }
 
 func (mp *master) run() error {
@@ -57,6 +58,7 @@ func (mp *master) run() error {
 		return err
 	}
 	if mp.Config.Fetcher != nil {
+		mp.printCheckUpdate = true
 		mp.fetch()
 		go mp.fetchLoop()
 	}
@@ -193,16 +195,22 @@ func (mp *master) fetch() {
 	if mp.restarting {
 		return //skip if restarting
 	}
-	mp.debugf("checking for updates...")
+	if mp.printCheckUpdate {
+		mp.debugf("checking for updates...")
+	}
 	reader, err := mp.Fetcher.Fetch()
 	if err != nil {
 		mp.debugf("failed to get latest version: %s", err)
 		return
 	}
 	if reader == nil {
-		mp.debugf("no updates")
+		if mp.printCheckUpdate {
+			mp.debugf("no updates")
+		}
+		mp.printCheckUpdate = false
 		return //fetcher has explicitly said there are no updates
 	}
+	mp.printCheckUpdate = true
 	mp.debugf("streaming update...")
 	//optional closer
 	if closer, ok := reader.(io.Closer); ok {
