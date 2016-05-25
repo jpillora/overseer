@@ -107,28 +107,49 @@ func Run(c Config) {
 	os.Exit(0)
 }
 
+//sanityCheck returns true if a check was performed
+func sanityCheck() bool {
+	//sanity check
+	if token := os.Getenv(envBinCheck); token != "" {
+		fmt.Fprint(os.Stdout, token)
+		return true
+	}
+	//legacy sanity check using old env var
+	if token := os.Getenv(envBinCheckLegacy); token != "" {
+		fmt.Fprint(os.Stdout, token)
+		return true
+	}
+	return false
+}
+
+//SanityCheck manually runs the check to ensure this binary
+//is compatible with overseer. This tries to ensure that a restart
+//is never performed against a bad binary, as it would require
+//manual intervention to rectify. This is automatically done
+//on overseer.Run() though it can be manually run prior whenever
+//necessary.
+func SanityCheck() {
+	if sanityCheck() {
+		os.Exit(0)
+	}
+}
+
+//abstraction over master/slave
 var currentProcess interface {
 	triggerRestart()
 	run() error
 }
 
 func runErr(c *Config) error {
-	if err := validate(c); err != nil {
-		return err
-	}
-	//sanity check
-	if token := os.Getenv(envBinCheck); token != "" {
-		fmt.Fprint(os.Stdout, token)
-		return nil
-	}
-	//legacy sanity check using old env var
-	if token := os.Getenv(envBinCheckLegacy); token != "" {
-		fmt.Fprint(os.Stdout, token)
-		return nil
-	}
 	//os not supported
 	if !supported {
 		return fmt.Errorf("os (%s) not supported", runtime.GOOS)
+	}
+	if err := validate(c); err != nil {
+		return err
+	}
+	if sanityCheck() {
+		return nil
 	}
 	//run either in master or slave mode
 	if os.Getenv(envIsSlave) == "1" {

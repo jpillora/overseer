@@ -8,8 +8,6 @@
 
 Commonly, graceful restarts are performed by the active process (*dark blue*) closing its listeners and passing these matching listening socket files (*green*) over to a newly started process. This restart causes any **foreground** process monitoring to incorrectly detect a program crash. `overseer` attempts to solve this by using a small process to perform this socket file exchange and proxying signals and exit code from the active process.
 
-:warning: *`overseer` is being used heavily at my workplace and no major issues have yet to be found. Nevertheless, consider it beta software and please report any [issues](https://github.com/jpillora/overseer/issues) you encounter.*
-
 ### Features
 
 * Simple
