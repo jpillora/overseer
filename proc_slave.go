@@ -49,7 +49,7 @@ type State struct {
 type slave struct {
 	*Config
 	id         string
-	listeners  []*upListener
+	listeners  []*overseerListener
 	masterPid  int
 	masterProc *os.Process
 	state      State
@@ -104,7 +104,7 @@ func (sp *slave) initFileDescriptors() error {
 	if err != nil {
 		return fmt.Errorf("invalid %s integer", envNumFDs)
 	}
-	sp.listeners = make([]*upListener, numFDs)
+	sp.listeners = make([]*overseerListener, numFDs)
 	sp.state.Listeners = make([]net.Listener, numFDs)
 	for i := 0; i < numFDs; i++ {
 		f := os.NewFile(uintptr(3+i), "")
@@ -112,7 +112,7 @@ func (sp *slave) initFileDescriptors() error {
 		if err != nil {
 			return fmt.Errorf("failed to inherit file descriptor: %d", i)
 		}
-		u := newUpListener(l)
+		u := newOverseerListener(l)
 		sp.listeners[i] = u
 		sp.state.Listeners[i] = u
 	}

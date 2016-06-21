@@ -268,7 +268,18 @@ func (mp *master) fetch() {
 	tokenIn := token()
 	cmd := exec.Command(tmpBinPath)
 	cmd.Env = []string{envBinCheck + "=" + tokenIn}
+	returned := false
+	go func() {
+		time.Sleep(5 * time.Second)
+		if !returned {
+			mp.warnf("sanity check against fetched executable timed-out, check overseer is running")
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+		}
+	}()
 	tokenOut, err := cmd.Output()
+	returned = true
 	if err != nil {
 		mp.warnf("failed to run temp binary: %s", err)
 		return

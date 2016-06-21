@@ -1,5 +1,9 @@
 package overseer
 
+//overseer listeners and connections allow graceful
+//restarts by tracking when all connections from a listener
+//have been closed
+
 import (
 	"net"
 	"os"
@@ -7,29 +11,29 @@ import (
 	"time"
 )
 
-func newUpListener(l net.Listener) *upListener {
-	return &upListener{
+func newOverseerListener(l net.Listener) *overseerListener {
+	return &overseerListener{
 		Listener:     l,
 		closeByForce: make(chan bool),
 	}
 }
 
 //gracefully closing net.Listener
-type upListener struct {
+type overseerListener struct {
 	net.Listener
 	closeError   error
 	closeByForce chan bool
 	wg           sync.WaitGroup
 }
 
-func (l *upListener) Accept() (net.Conn, error) {
+func (l *overseerListener) Accept() (net.Conn, error) {
 	conn, err := l.Listener.(*net.TCPListener).AcceptTCP()
 	if err != nil {
 		return nil, err
 	}
 	conn.SetKeepAlive(true)                  // see http.tcpKeepAliveListener
 	conn.SetKeepAlivePeriod(3 * time.Minute) // see http.tcpKeepAliveListener
-	uconn := upConn{
+	uconn := overseerConn{
 		Conn:   conn,
 		wg:     &l.wg,
 		closed: make(chan bool),
@@ -48,7 +52,7 @@ func (l *upListener) Accept() (net.Conn, error) {
 }
 
 //non-blocking trigger close
-func (l *upListener) release(timeout time.Duration) {
+func (l *overseerListener) release(timeout time.Duration) {
 	//stop accepting connections - release fd
 	l.closeError = l.Listener.Close()
 	//start timer, close by force if deadline not met
@@ -68,12 +72,12 @@ func (l *upListener) release(timeout time.Duration) {
 }
 
 //blocking wait for close
-func (l *upListener) Close() error {
+func (l *overseerListener) Close() error {
 	l.wg.Wait()
 	return l.closeError
 }
 
-func (l *upListener) File() *os.File {
+func (l *overseerListener) File() *os.File {
 	// returns a dup(2) - FD_CLOEXEC flag *not* set
 	tl := l.Listener.(*net.TCPListener)
 	fl, _ := tl.File()
@@ -81,17 +85,17 @@ func (l *upListener) File() *os.File {
 }
 
 //notifying on close net.Conn
-type upConn struct {
+type overseerConn struct {
 	net.Conn
 	wg     *sync.WaitGroup
 	closed chan bool
 }
 
-func (uconn upConn) Close() error {
-	err := uconn.Conn.Close()
+func (o overseerConn) Close() error {
+	err := o.Conn.Close()
 	if err == nil {
-		uconn.wg.Done()
-		uconn.closed <- true
+		o.wg.Done()
+		o.closed <- true
 	}
 	return err
 }

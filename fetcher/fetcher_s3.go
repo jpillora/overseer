@@ -1,10 +1,12 @@
 package fetcher
 
 import (
+	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -49,11 +51,6 @@ func (s *S3) Init() error {
 		Region:      &s.Region,
 	}
 	s.client = s3.New(session.New(config))
-
-	//TODO include this? maybe given access to bucket after init
-	// resp, err := s.client.HeadBucketRequest(&s3.HeadBucketInput{Bucket: &s.Bucket})
-	// if err != nil {}
-
 	//apply defaults
 	if s.Interval == 0 {
 		s.Interval = 5 * time.Minute
@@ -80,6 +77,10 @@ func (s *S3) Fetch() (io.Reader, error) {
 	get, err := s.client.GetObject(&s3.GetObjectInput{Bucket: &s.Bucket, Key: &s.Key})
 	if err != nil {
 		return nil, fmt.Errorf("GET request failed (%s)", err)
+	}
+	//extract gz files
+	if strings.HasSuffix(s.Key, ".gz") && *get.ContentEncoding != "gzip" {
+		return gzip.NewReader(get.Body)
 	}
 	//success!
 	return get.Body, nil
