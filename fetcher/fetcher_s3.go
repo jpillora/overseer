@@ -79,7 +79,7 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("GET request failed (%s)", err)
 	}
 	//extract gz files
-	if strings.HasSuffix(s.Key, ".gz") && *get.ContentEncoding != "gzip" {
+	if strings.HasSuffix(s.Key, ".gz") && aws.StringValue(get.ContentEncoding) != "gzip" {
 		return gzip.NewReader(get.Body)
 	}
 	//success!
