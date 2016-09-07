@@ -62,6 +62,32 @@ func (mp *master) run() error {
 		mp.fetch()
 		go mp.fetchLoop()
 	}
+	if mp.Test {
+		mp.debugf("test mode enabled")
+		state := State{
+			Enabled: true,
+			ID: hex.EncodeToString(mp.binHash),
+			StartedAt: time.Now(),
+			Address: mp.Config.Address,
+			Addresses: mp.Config.Addresses,
+			GracefulShutdown: make(chan bool, 1),
+			BinPath: mp.binPath,
+		}
+		state.Listeners = make([]net.Listener, len(mp.slaveExtraFiles))
+		for i, extraFile := range mp.slaveExtraFiles {
+			l, err := net.FileListener(extraFile)
+			if err != nil {
+				return fmt.Errorf("failed to inherit file descriptor: %d", i)
+			}
+			u := newOverseerListener(l)
+			state.Listeners[i] = u
+		}
+		if len(state.Listeners) > 0 {
+			state.Listener = state.Listeners[0]
+		}
+		mp.Config.Program(state)
+		return nil
+	}
 	return mp.forkLoop()
 }
 

@@ -47,6 +47,9 @@ type Config struct {
 	PreUpgrade func(tempBinaryPath string) error
 	//Debug enables all [overseer] logs.
 	Debug bool
+	//Test disables fork and server restart to make it possible to unit test
+	//the server.
+	Test bool
 	//NoWarn disables warning [overseer] logs.
 	NoWarn bool
 	//NoRestart disables all restarts, this option essentially converts
