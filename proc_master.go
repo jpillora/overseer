@@ -269,7 +269,7 @@ func (mp *master) fetch() {
 	//overseer sanity check, dont replace our good binary with a non-executable file
 	tokenIn := token()
 	cmd := exec.Command(tmpBinPath)
-	cmd.Env = []string{envBinCheck + "=" + tokenIn}
+	cmd.Env = append(os.Environ(), []string{envBinCheck + "=" + tokenIn}...)
 	returned := false
 	go func() {
 		time.Sleep(5 * time.Second)
