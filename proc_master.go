@@ -270,6 +270,7 @@ func (mp *master) fetch() {
 	tokenIn := token()
 	cmd := exec.Command(tmpBinPath)
 	cmd.Env = append(os.Environ(), []string{envBinCheck + "=" + tokenIn}...)
+	cmd.Args = os.Args
 	returned := false
 	go func() {
 		time.Sleep(5 * time.Second)
