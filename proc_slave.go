@@ -147,6 +147,9 @@ func (sp *slave) watchSignal() {
 		}
 		//start death-timer
 		go func() {
+			// send signal to child process first
+			syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+			// then sleep and force quit
 			time.Sleep(sp.Config.TerminateTimeout)
 			sp.debugf("timeout. forceful shutdown")
 			os.Exit(1)
