@@ -11,7 +11,7 @@ Commonly, graceful restarts are performed by the active process (*dark blue*) cl
 ### Features
 
 * Simple
-* Works with process managers
+* Works with process managers (systemd, upstart, supervisor, etc)
 * Graceful, zero-down time restarts
 * Easy self-upgrading binaries
 
@@ -77,77 +77,76 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 ### More examples
 
-* See the [example/](example/) directory and run `example.sh`, you should see the following output:
+See the [example/](example/) directory and run `example.sh`, you should see the following output:
 
-	```sh
-	$ cd example/
-	$ sh example.sh
-	serving . on port 5002
-	BUILT APP (1)
-	RUNNING APP
-	app#1 (1cd8b9928d44b0a6e89df40574b8b6d20a417679) listening...
-	app#1 (1cd8b9928d44b0a6e89df40574b8b6d20a417679) says hello
-	app#1 (1cd8b9928d44b0a6e89df40574b8b6d20a417679) says hello
-	BUILT APP (2)
-	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) listening...
-	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) says hello
-	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) says hello
-	app#1 (1cd8b9928d44b0a6e89df40574b8b6d20a417679) says hello
-	app#1 (1cd8b9928d44b0a6e89df40574b8b6d20a417679) exiting...
-	BUILT APP (3)
-	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) listening...
-	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) says hello
-	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) says hello
-	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) says hello
-	app#2 (b9b251f1be6d0cc423ef921f107cb4fc52f760b3) exiting...
-	app#3 (248f80ea049c835e7e3714b7169c539d3a4d6131) says hello
-	```
+```sh
+$ cd example/
+$ sh example.sh
+BUILT APP (1)
+RUNNING APP
+app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) listening...
+app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
+app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
+BUILT APP (2)
+app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) listening...
+app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
+app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
+app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
+app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) exiting...
+BUILT APP (3)
+app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) listening...
+app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
+app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
+app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
+app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) exiting...
+app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
+```
 
-	**Note:** `app#1` stays running until the last request is closed.
+**Note:** `app#1` stays running until the last request is closed.
 
-* Only use graceful restarts:
+#### Only use graceful restarts
 
-	```go
-	func main() {
-		overseer.Run(overseer.Config{
-			Program: prog,
-			Address: ":3000",
-		})
-	}
-	```
+```go
+func main() {
+	overseer.Run(overseer.Config{
+		Program: prog,
+		Address: ":3000",
+	})
+}
+```
 
-	Send `main` a `SIGUSR2` (`Config.RestartSignal`) to manually trigger a restart
+Send `main` a `SIGUSR2` (`Config.RestartSignal`) to manually trigger a restart
 
-* Only use auto-upgrades, no restarts
+#### Only use auto-upgrades, no restarts
 
-	```go
-	func main() {
-		overseer.Run(overseer.Config{
-			Program: prog,
-			NoRestart: true,
-			Fetcher: &fetcher.HTTP{
-				URL:      "http://localhost:4000/binaries/myapp",
-				Interval: 1 * time.Second,
-			},
-		})
-	}
-	```
+```go
+func main() {
+	overseer.Run(overseer.Config{
+		Program: prog,
+		NoRestart: true,
+		Fetcher: &fetcher.HTTP{
+			URL:      "http://localhost:4000/binaries/myapp",
+			Interval: 1 * time.Second,
+		},
+	})
+}
+```
 
-	Your binary will be upgraded though it will require manual restart from the user, suitable for creating self-upgrading command-line applications.
+Your binary will be upgraded though it will require manual restart from the user, suitable for creating self-upgrading command-line applications.
 
-* Multi-platform binaries using a dynamic fetch `URL`
+#### Multi-platform binaries using a dynamic fetch `URL`
 
-	```go
-	func main() {
-		overseer.Run(overseer.Config{
-			Program: prog,
-			Fetcher: &fetcher.HTTP{
-				URL: "http://localhost:4000/binaries/app-"+runtime.GOOS+"-"+runtime.GOARCH,
-				//e.g.http://localhost:4000/binaries/app-linux-amd64
-			},
-		})
-	}
-	```
+```go
+func main() {
+	overseer.Run(overseer.Config{
+		Program: prog,
+		Fetcher: &fetcher.HTTP{
+			URL: "http://localhost:4000/binaries/app-"+runtime.GOOS+"-"+runtime.GOARCH,
+			//e.g.http://localhost:4000/binaries/app-linux-amd64
+		},
+	})
+}
+```
 
 ### Known issues
 
@@ -161,8 +160,10 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 * [Core `overseer` package](https://godoc.org/github.com/jpillora/overseer)
 * [Common `fetcher.Interface`](https://godoc.org/github.com/jpillora/overseer/fetcher#Interface)
-	* [HTTP fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
-	* [S3 fetcher type](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
+	* [File fetcher](https://godoc.org/github.com/jpillora/overseer/fetcher#File)
+	* [HTTP fetcher](https://godoc.org/github.com/jpillora/overseer/fetcher#HTTP)
+	* [S3 fetcher](https://godoc.org/github.com/jpillora/overseer/fetcher#S3)
+	* [Github fetcher](https://godoc.org/github.com/jpillora/overseer/fetcher#Github)
 
 ### Third-party Fetchers
 
