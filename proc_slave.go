@@ -18,6 +18,7 @@ var (
 	DisabledState = State{Enabled: false}
 )
 
+// State contains the current run-time state of overseer
 type State struct {
 	//whether overseer is running enabled. When enabled,
 	//this program will be running in a child process and

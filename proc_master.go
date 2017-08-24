@@ -394,7 +394,7 @@ func (mp *master) fork() error {
 		}
 		mp.debugf("prog exited with %d", code)
 		//if a restarts are disabled or if it was an
-		//unexpected creash, proxy this exit straight
+		//unexpected crash, proxy this exit straight
 		//through to the main process
 		if mp.NoRestart || !mp.restarting {
 			os.Exit(code)

@@ -25,7 +25,7 @@ type Github struct {
 	//By default a file will match if it contains
 	//both GOOS and GOARCH.
 	Asset func(filename string) bool
-	//interal state
+	//internal state
 	releaseURL    string
 	delay         bool
 	lastETag      string
@@ -42,6 +42,7 @@ func (h *Github) defaultAsset(filename string) bool {
 	return strings.Contains(filename, runtime.GOOS) && strings.Contains(filename, runtime.GOARCH)
 }
 
+// Init validates the provided config
 func (h *Github) Init() error {
 	//apply defaults
 	if h.User == "" {
@@ -62,6 +63,7 @@ func (h *Github) Init() error {
 	return nil
 }
 
+// Fetch the binary from the provided Repository
 func (h *Github) Fetch() (io.Reader, error) {
 	//delay fetches after first
 	if h.delay {
@@ -105,7 +107,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("release location request failed (status code %d)", resp.StatusCode)
 	}
 	s3URL := resp.Header.Get("Location")
-	//psuedo-HEAD request
+	//pseudo-HEAD request
 	req, err = http.NewRequest("GET", s3URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("release location url error (%s)", err)

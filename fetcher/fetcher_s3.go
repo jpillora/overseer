@@ -31,6 +31,7 @@ type S3 struct {
 	lastETag string
 }
 
+// Init validates the provided config
 func (s *S3) Init() error {
 	if s.Bucket == "" {
 		return errors.New("S3 bucket not set")
@@ -58,6 +59,7 @@ func (s *S3) Init() error {
 	return nil
 }
 
+// Fetch the binary from S3
 func (s *S3) Fetch() (io.Reader, error) {
 	//delay fetches after first
 	if s.delay {

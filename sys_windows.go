@@ -27,7 +27,7 @@ func move(dst, src string) error {
 		return nil
 	}
 	//HACK: we're shelling out to move because windows
-	//throws errors when crossing device boundaryes.
+	//throws errors when crossing device boundaries.
 	// https://www.microsoft.com/resources/documentation/windows/xp/all/proddocs/en-us/move.mspx?mfr=true
 
 	// https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way/

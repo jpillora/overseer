@@ -1,4 +1,5 @@
-// Daemonizable self-upgrading binaries in Go (golang).
+// Package overseer implements daemonizable
+// self-upgrading binaries in Go (golang).
 package overseer
 
 import (
@@ -22,6 +23,7 @@ const (
 	envBinCheckLegacy = "GO_UPGRADE_BIN_CHECK"
 )
 
+// Config defines overseer's run-time configuration
 type Config struct {
 	//Required will prevent overseer from fallback to running
 	//running the program in the main process on failure.
@@ -42,7 +44,7 @@ type Config struct {
 	//This helps to prevent unwieldy fetch.Interfaces from hogging
 	//too many resources. Defaults to 1 second.
 	MinFetchInterval time.Duration
-	//PreUpgrade runs after a binary has been retreived, user defined checks
+	//PreUpgrade runs after a binary has been retrieved, user defined checks
 	//can be run here and returning an error will cancel the upgrade.
 	PreUpgrade func(tempBinaryPath string) error
 	//Debug enables all [overseer] logs.
@@ -91,7 +93,7 @@ func RunErr(c Config) error {
 }
 
 //Run executes overseer, if an error is
-//encounted, overseer fallsback to running
+//encountered, overseer fallsback to running
 //the program directly (unless Required is set).
 func Run(c Config) {
 	err := runErr(&c)
