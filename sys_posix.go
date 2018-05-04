@@ -26,7 +26,7 @@ func move(dst, src string) error {
 		return nil
 	}
 	//HACK: we're shelling out to mv because linux
-	//throws errors when crossing device boundaryes.
+	//throws errors when crossing device boundaries.
 	//TODO see sys_posix_mv.go
 	return exec.Command("mv", src, dst).Run()
 }
