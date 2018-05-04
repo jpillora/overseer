@@ -28,7 +28,16 @@ func move(dst, src string) error {
 	//HACK: we're shelling out to mv because linux
 	//throws errors when crossing device boundaries.
 	//TODO see sys_posix_mv.go
-	return exec.Command("mv", src, dst).Run()
+	if err := exec.Command("mv", src, dst).Run(); err != nil {
+		return err
+	}
+
+	// Run sync to 'commit' the mv by clearing caches
+	return sync().Run()
+}
+
+func sync() *exec.Cmd {
+	return exec.Command("sync")
 }
 
 func chmod(f *os.File, perms os.FileMode) error {
