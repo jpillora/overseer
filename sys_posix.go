@@ -33,10 +33,10 @@ func move(dst, src string) error {
 	}
 
 	// Run sync to 'commit' the mv by clearing caches
-	return sync().Run()
+	return syncCmd().Run()
 }
 
-func sync() *exec.Cmd {
+func syncCmd() *exec.Cmd {
 	return exec.Command("sync")
 }
 
