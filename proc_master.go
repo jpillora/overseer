@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kardianos/osext"
+	"github.com/robfig/cron"
 )
 
 var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
@@ -59,8 +60,26 @@ func (mp *master) run() error {
 	}
 	if mp.Config.Fetcher != nil {
 		mp.printCheckUpdate = true
-		mp.fetch()
-		go mp.fetchLoop()
+		if mp.FetchCronSchedule != nil {
+			if mp.Cron == nil {
+				mp.Cron = cron.New()
+				defer mp.Cron.Stop()
+			}
+			var jobRunning bool
+			mp.Cron.Schedule(*mp.FetchCronSchedule, cron.FuncJob(func() {
+				if jobRunning {
+					return
+				}
+				jobRunning = true
+				defer func() {
+					jobRunning = false
+				}()
+				mp.fetch()
+			}))
+		} else {
+			mp.fetch()
+			go mp.fetchLoop()
+		}
 	}
 	return mp.forkLoop()
 }

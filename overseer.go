@@ -5,6 +5,7 @@ package overseer
 import (
 	"errors"
 	"fmt"
+	"github.com/robfig/cron"
 	"log"
 	"os"
 	"runtime"
@@ -44,6 +45,12 @@ type Config struct {
 	//This helps to prevent unwieldy fetch.Interfaces from hogging
 	//too many resources. Defaults to 1 second.
 	MinFetchInterval time.Duration
+	//FetchCronRule defines the cron (github.com/robfig/cron) rule instead of
+	//MinFetchInterval
+	FetchCronSchedule *cron.Schedule
+	//Cron cron instance for use instead of interval.
+	//See `FetchCronSchedule` and `MinFetchInterval` fields.
+	Cron *cron.Cron
 	//PreUpgrade runs after a binary has been retrieved, user defined checks
 	//can be run here and returning an error will cancel the upgrade.
 	PreUpgrade func(tempBinaryPath string) error
