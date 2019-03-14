@@ -77,11 +77,21 @@ See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration optio
 
 ### More examples
 
-See the [example/](example/) directory and run `example.sh`, you should see the following output:
+
+See the [example/](example/) directory and run `example.sh EXAMPLE_NAME`, you should see the following output:
 
 ```sh
 $ cd example/
-$ sh example.sh
+```
+
+Examples:
+- default: `$ sh example.sh default` (see above)
+- cron_default: `$ sh example.sh cron_default`
+- cron_custom:  `$ sh example.sh cron_custom`
+
+
+```sh
+$ sh example.sh default
 BUILT APP (1)
 RUNNING APP
 app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) listening...
@@ -147,6 +157,50 @@ func main() {
 	})
 }
 ```
+
+#### Using CRON
+
+##### Using default cron instance
+
+```go
+import (
+	"github.com/robfig/cron"
+)
+
+func main() {
+	schedule, _ := cron.Parse("@daily")
+	overseer.Run(overseer.Config{
+		Program: prog,
+		Address: ":3000",
+		
+		FetchCronSchedule: &schedule,
+	})
+}
+```
+
+##### Using your cron instance
+
+```go
+import (
+	"github.com/robfig/cron"
+)
+
+func main() {
+	Cron := cron.New()
+	Cron.Start()
+	defer Cron.Stop()
+	
+	schedule, _ := cron.Parse("@daily")
+	overseer.Run(overseer.Config{
+		Program: prog,
+		Address: ":3000",
+		
+		Cron: Cron,
+		FetchCronSchedule: &schedule,
+	})
+}
+```
+
 
 ### Known issues
 

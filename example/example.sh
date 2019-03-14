@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ "$1" != '' ]; then
+    cd "$1" || exit $?
+fi
+
 #NOTE: DONT CTRL+C OR CLEANUP WONT OCCUR
 #      ENSURE PORTS 5001,5002 ARE UNUSED
 
