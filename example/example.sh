@@ -1,8 +1,11 @@
 #!/bin/bash
 
-if [ "$1" != '' ]; then
-    cd "$1" || exit $?
+if [ "$1" = '' ]; then
+    echo "Usage: $0 EXAMPLE_NAME" >&2
+    exit 1
 fi
+
+cd "$1" || exit $?
 
 #NOTE: DONT CTRL+C OR CLEANUP WONT OCCUR
 #      ENSURE PORTS 5001,5002 ARE UNUSED
