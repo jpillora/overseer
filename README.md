@@ -25,7 +25,7 @@ go get github.com/jpillora/overseer
 
 This program works with process managers, supports graceful, zero-down time restarts and self-upgrades its own binary.
 
-``` go
+```go
 package main
 
 import (
