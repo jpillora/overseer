@@ -68,7 +68,7 @@ func (mp *master) run() error {
 				mp.Cron.Start()
 				defer mp.Cron.Stop()
 			}
-			mp.Cron.Schedule(*mp.FetchCronSchedule, cron.FuncJob(mp.fetch))
+			go mp.Cron.Schedule(*mp.FetchCronSchedule, cron.FuncJob(mp.fetch))
 		} else {
 			mp.fetch()
 			go mp.fetchLoop()
