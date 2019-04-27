@@ -310,7 +310,7 @@ func (mp *master) fetch() {
 
 func (mp *master) triggerRestart() {
 	if mp.restarting {
-		mp.debugf("already graceful restarting")
+		go mp.debugf("already graceful restarting")
 		return //skip
 	} else if mp.slaveCmd == nil || mp.restarting {
 		mp.debugf("no slave process")
