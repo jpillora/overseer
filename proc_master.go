@@ -118,7 +118,7 @@ func (mp *master) setupSignalling() {
 func (mp *master) handleSignal(s os.Signal) {
 	if s == mp.RestartSignal {
 		//user initiated manual restart
-		mp.triggerRestart()
+		go mp.triggerRestart()
 	} else if s.String() == "child exited" {
 		// will occur on every restart, ignore it
 	} else
