@@ -118,7 +118,7 @@ func (mp *master) setupSignalling() {
 func (mp *master) handleSignal(s os.Signal) {
 	if s == mp.RestartSignal {
 		//user initiated manual restart
-		mp.triggerRestart()
+		go mp.triggerRestart()
 	} else if s.String() == "child exited" {
 		// will occur on every restart, ignore it
 	} else
@@ -310,7 +310,7 @@ func (mp *master) fetch() {
 
 func (mp *master) triggerRestart() {
 	if mp.restarting {
-		go mp.debugf("already graceful restarting")
+		mp.debugf("already graceful restarting")
 		return //skip
 	} else if mp.slaveCmd == nil || mp.restarting {
 		mp.debugf("no slave process")
