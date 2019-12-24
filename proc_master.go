@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kardianos/osext"
+	"github.com/robfig/cron"
 )
 
 var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
@@ -40,6 +41,8 @@ type master struct {
 	descriptorsReleased chan bool
 	signalledAt         time.Time
 	printCheckUpdate    bool
+	fetchingMux         sync.Mutex
+	fetching            bool
 }
 
 func (mp *master) run() error {
@@ -59,8 +62,17 @@ func (mp *master) run() error {
 	}
 	if mp.Config.Fetcher != nil {
 		mp.printCheckUpdate = true
-		mp.fetch()
-		go mp.fetchLoop()
+		if mp.FetchCronSchedule != nil {
+			if mp.Cron == nil {
+				mp.Cron = cron.New()
+				mp.Cron.Start()
+				defer mp.Cron.Stop()
+			}
+			go mp.Cron.Schedule(*mp.FetchCronSchedule, cron.FuncJob(mp.fetch))
+		} else {
+			mp.fetch()
+			go mp.fetchLoop()
+		}
 	}
 	return mp.forkLoop()
 }
@@ -196,9 +208,17 @@ func (mp *master) fetchLoop() {
 }
 
 func (mp *master) fetch() {
-	if mp.restarting {
+	if mp.fetching || mp.restarting {
 		return //skip if restarting
 	}
+	mp.fetchingMux.Lock()
+	mp.fetching = true
+
+	defer func() {
+		mp.fetching = false
+		mp.fetchingMux.Unlock()
+	}()
+
 	if mp.printCheckUpdate {
 		mp.debugf("checking for updates...")
 	}
