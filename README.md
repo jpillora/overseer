@@ -84,22 +84,22 @@ $ cd example/
 $ sh example.sh
 BUILT APP (1)
 RUNNING APP
-app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) listening...
-app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
-app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
+app#1 (c7940a5bfc3f0e8633d3bf775f54bb59f50b338e) listening...
+app#1 (c7940a5bfc3f0e8633d3bf775f54bb59f50b338e) says hello
+app#1 (c7940a5bfc3f0e8633d3bf775f54bb59f50b338e) says hello
 BUILT APP (2)
-app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) listening...
-app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
-app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
-app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) says hello
-app#1 (031c802ee74f00b2a5c52f2fe647523973c09441) exiting...
+app#2 (3dacb8bc673c1b4d38f8fb4fad5b017671aa8a67) listening...
+app#2 (3dacb8bc673c1b4d38f8fb4fad5b017671aa8a67) says hello
+app#2 (3dacb8bc673c1b4d38f8fb4fad5b017671aa8a67) says hello
+app#1 (c7940a5bfc3f0e8633d3bf775f54bb59f50b338e) says hello
+app#1 (c7940a5bfc3f0e8633d3bf775f54bb59f50b338e) exiting...
 BUILT APP (3)
-app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) listening...
-app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
-app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
-app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) says hello
-app#2 (25d19f139f50f39fadbd066b438ebdc28d818eb1) exiting...
-app#3 (5ed8170e5bbd6947cc514c87ac29e7acfba5cffc) says hello
+app#3 (b7614e7ff42eed8bb334ed35237743b0e4041678) listening...
+app#3 (b7614e7ff42eed8bb334ed35237743b0e4041678) says hello
+app#3 (b7614e7ff42eed8bb334ed35237743b0e4041678) says hello
+app#2 (3dacb8bc673c1b4d38f8fb4fad5b017671aa8a67) says hello
+app#2 (3dacb8bc673c1b4d38f8fb4fad5b017671aa8a67) exiting...
+app#3 (b7614e7ff42eed8bb334ed35237743b0e4041678) says hello
 ```
 
 **Note:** `app#1` stays running until the last request is closed.
@@ -168,20 +168,6 @@ func main() {
 ### Third-party Fetchers
 
 * [overseer-bindiff](https://github.com/tgulacsi/overseer-bindiff) A binary diff fetcher and builder
-
-### Docker
-
-1. Compile your `overseer`able `app` to a `/path/on/docker/host/dir/app`
-1. Then run it with:
-
-	```sh
-	#run the app inside a standard Debian container
-	docker run -d -v /path/on/docker/host/dir/:/home/ -w /home/ debian /home/app
-	```
-
-1. For testing, swap out `-d` (daemonize) for `--rm -it` (remove on exit, input, terminal)
-1. `app` should mount its parent directory as a volume in order to store the latest binaries on the host
-1. If the OS doesn't ship with TLS certs, you can mount them from the host with `-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt`
 
 ### Contributing
 

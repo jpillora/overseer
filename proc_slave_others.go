@@ -5,6 +5,7 @@ package overseer
 import (
 	"fmt"
 	"os"
+	"syscall"
 	"time"
 )
 

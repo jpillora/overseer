@@ -39,7 +39,7 @@ In general New fetchers should go in their own repos which can be linked to from
 * SCP fetcher (connect to a server, poll path)
 * Github fetcher (given a repo, poll releases)
 * etcd fetcher (given a cluster, watch key)
-* [Omaha](https://coreos.com/docs/coreupdate/custom-apps/coreupdate-protocol/) fetcher (a client which speaks omaha, downloads appropriate binary)
+* [Omaha](https://github.com/google/omaha) fetcher (a client which speaks omaha, downloads appropriate binary)
 
 ### Binary diffs and signatures
 
