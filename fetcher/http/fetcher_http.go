@@ -1,4 +1,4 @@
-package fetcher
+package fetcherHttp
 
 import (
 	"compress/gzip"

@@ -1,4 +1,4 @@
-package fetcher
+package fetcherS3
 
 import (
 	"compress/gzip"

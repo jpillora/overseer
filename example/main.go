@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jpillora/overseer"
-	"github.com/jpillora/overseer/fetcher"
+	"github.com/jpillora/overseer/fetcher/file"
 )
 
 //see example.sh for the use-case
@@ -33,7 +33,7 @@ func main() {
 	overseer.Run(overseer.Config{
 		Program: prog,
 		Address: ":5001",
-		Fetcher: &fetcher.File{Path: "my_app_next"},
+		Fetcher: &fetcherFile.File{Path: "my_app_next"},
 		Debug:   false, //display log of overseer actions
 	})
 }

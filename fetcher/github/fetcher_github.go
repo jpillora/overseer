@@ -1,4 +1,4 @@
-package fetcher
+package fetcherGithub
 
 import (
 	"compress/gzip"

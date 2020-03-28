@@ -35,7 +35,7 @@ import (
 	"time"
 
 	"github.com/jpillora/overseer"
-	"github.com/jpillora/overseer/fetcher"
+	"github.com/jpillora/overseer/fetcher/http"
 )
 
 //create another main() to run the overseer process
@@ -44,7 +44,7 @@ func main() {
 	overseer.Run(overseer.Config{
 		Program: prog,
 		Address: ":3000",
-		Fetcher: &fetcher.HTTP{
+		Fetcher: &fetcherHttp.HTTP{
 			URL:      "http://localhost:4000/binaries/myapp",
 			Interval: 1 * time.Second,
 		},
@@ -124,7 +124,7 @@ func main() {
 	overseer.Run(overseer.Config{
 		Program: prog,
 		NoRestart: true,
-		Fetcher: &fetcher.HTTP{
+		Fetcher: &fetcherHttp.HTTP{
 			URL:      "http://localhost:4000/binaries/myapp",
 			Interval: 1 * time.Second,
 		},
