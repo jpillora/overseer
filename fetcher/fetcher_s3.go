@@ -2,31 +2,39 @@ package fetcher
 
 import (
 	"compress/gzip"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/jpillora/s3"
 )
 
 //S3 uses authenticated HEAD requests to poll the status of a given
 //object. If it detects this file has been updated, it will perform
 //an object GET and return its io.Reader stream.
 type S3 struct {
+	//Access key falls back to env AWS_ACCESS_KEY, then metadata
 	Access string
+	//Secret key falls back to env AWS_SECRET_ACCESS_KEY, then metadata
 	Secret string
+	//Region defaults to ap-southeast-2
 	Region string
 	Bucket string
 	Key    string
-	//interal state
+	//Interval between checks
 	Interval time.Duration
-	client   *s3.S3
+	//HeadTimeout defaults to 5 seconds
+	HeadTimeout time.Duration
+	//GetTimeout defaults to 5 minutes
+	GetTimeout time.Duration
+	//interal state
+	client   *http.Client
 	delay    bool
 	lastETag string
 }
@@ -41,20 +49,24 @@ func (s *S3) Init() error {
 	if s.Region == "" {
 		s.Region = "ap-southeast-2"
 	}
-	creds := credentials.AnonymousCredentials
-	if s.Access != "" {
-		creds = credentials.NewStaticCredentials(s.Access, s.Secret, "")
-	} else if os.Getenv("AWS_ACCESS_KEY") != "" {
-		creds = credentials.NewEnvCredentials()
+	//initial etag
+	if p, _ := os.Executable(); p != "" {
+		if f, err := os.Open(p); err == nil {
+			h := md5.New()
+			io.Copy(h, f)
+			f.Close()
+			s.lastETag = hex.EncodeToString(h.Sum(nil))
+		}
 	}
-	config := &aws.Config{
-		Credentials: creds,
-		Region:      &s.Region,
-	}
-	s.client = s3.New(session.New(config))
 	//apply defaults
-	if s.Interval == 0 {
+	if s.Interval <= 0 {
 		s.Interval = 5 * time.Minute
+	}
+	if s.HeadTimeout <= 0 {
+		s.HeadTimeout = 5 * time.Second
+	}
+	if s.GetTimeout <= 0 {
+		s.GetTimeout = 5 * time.Minute
 	}
 	return nil
 }
@@ -66,24 +78,49 @@ func (s *S3) Fetch() (io.Reader, error) {
 		time.Sleep(s.Interval)
 	}
 	s.delay = true
+	//http client where we change the timeout
+	c := http.Client{}
+	//options for this key
+	creds := s3.AmbientCredentials()
+	if s.Access != "" && s.Secret != "" {
+		creds = s3.Credentials(s.Access, s.Secret)
+	}
+	opts := []s3.Option{creds, s3.Region(s.Region), s3.Bucket(s.Bucket), s3.Key(s.Key)}
 	//status check using HEAD
-	head, err := s.client.HeadObject(&s3.HeadObjectInput{Bucket: &s.Bucket, Key: &s.Key})
+	req, err := s3.NewRequest("HEAD", opts...)
+	if err != nil {
+		return nil, err
+	}
+	c.Timeout = s.HeadTimeout
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HEAD request failed (%s)", err)
 	}
-	if s.lastETag == *head.ETag {
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HEAD request failed (%s)", resp.Status)
+	}
+	etag := strings.Trim(resp.Header.Get("ETag"), `"`)
+	if s.lastETag == etag {
 		return nil, nil //skip, file match
 	}
-	s.lastETag = *head.ETag
+	s.lastETag = etag
 	//binary fetch using GET
-	get, err := s.client.GetObject(&s3.GetObjectInput{Bucket: &s.Bucket, Key: &s.Key})
+	req, err = s3.NewRequest("GET", opts...)
+	if err != nil {
+		return nil, err
+	}
+	c.Timeout = s.GetTimeout
+	resp, err = c.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET request failed (%s)", err)
 	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET request failed (%s)", resp.Status)
+	}
 	//extract gz files
-	if strings.HasSuffix(s.Key, ".gz") && aws.StringValue(get.ContentEncoding) != "gzip" {
-		return gzip.NewReader(get.Body)
+	if strings.HasSuffix(s.Key, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
+		return gzip.NewReader(resp.Body)
 	}
 	//success!
-	return get.Body, nil
+	return nil, nil
 }

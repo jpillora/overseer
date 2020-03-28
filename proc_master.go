@@ -17,8 +17,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/kardianos/osext"
 )
 
 var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
@@ -67,7 +65,7 @@ func (mp *master) run() error {
 
 func (mp *master) checkBinary() error {
 	//get path to binary and confirm its writable
-	binPath, err := osext.Executable()
+	binPath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to find binary path (%s)", err)
 	}
