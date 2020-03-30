@@ -73,13 +73,6 @@ func (sp *slave) watchParent() error {
 	return nil
 }
 
-func (sp *slave) triggerRestart() {
-	//FIXME: This does not work
-	if err := sp.masterProc.Signal(sp.Config.RestartSignal); err != nil {
-		os.Exit(1)
-	}
-}
-
 func GetWin32Proc(pid int32) ([]Win32_Process, error) {
 	return GetWin32ProcWithContext(context.Background(), pid)
 }
