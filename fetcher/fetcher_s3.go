@@ -122,5 +122,5 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return gzip.NewReader(resp.Body)
 	}
 	//success!
-	return nil, nil
+	return resp.Body, nil
 }
