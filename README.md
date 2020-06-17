@@ -153,7 +153,6 @@ func main() {
 * The master process's `overseer.Config` cannot be changed via an upgrade, the master process must be restarted.
 	* Therefore, `Addresses` can only be changed by restarting the main process.
 * Currently shells out to `mv` for moving files because `mv` handles cross-partition moves unlike `os.Rename`.
-* Only supported on darwin and linux.
 * Package `init()` functions will run twice on start, once in the main process and once in the child process.
 
 ### More documentation
