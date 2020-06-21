@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	envSlaveID        = "OVERSEER_SLAVE_ID"
-	envIsSlave        = "OVERSEER_IS_SLAVE"
+	envChildID        = "OVERSEER_CHILD_ID"
+	envIsChild        = "OVERSEER_IS_CHILD"
 	envNumFDs         = "OVERSEER_NUM_FDS"
 	envBinID          = "OVERSEER_BIN_ID"
 	envBinPath        = "OVERSEER_BIN_PATH"
@@ -136,7 +136,7 @@ func SanityCheck() {
 	}
 }
 
-//abstraction over master/slave
+//abstraction over parent/child
 var currentProcess interface {
 	triggerRestart()
 	run() error
@@ -153,11 +153,11 @@ func runErr(c *Config) error {
 	if sanityCheck() {
 		return nil
 	}
-	//run either in master or slave mode
-	if os.Getenv(envIsSlave) == "1" {
-		currentProcess = &slave{Config: c}
+	//run either in parent or child mode
+	if os.Getenv(envIsChild) == "1" {
+		currentProcess = &child{Config: c}
 	} else {
-		currentProcess = &master{Config: c}
+		currentProcess = &parent{Config: c}
 	}
 	return currentProcess.run()
 }
