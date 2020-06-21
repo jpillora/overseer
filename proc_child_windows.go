@@ -5,9 +5,10 @@ package overseer
 import (
 	"context"
 	"fmt"
-	"github.com/StackExchange/wmi"
 	"os"
 	"time"
+
+	"github.com/StackExchange/wmi"
 )
 
 var (
@@ -53,18 +54,18 @@ type Win32_Process struct {
 	WorkingSetSize        uint64
 }
 
-func (sp *slave) watchParent() error {
-	sp.masterPid = os.Getppid()
-	proc, err := os.FindProcess(sp.masterPid)
+func (cp *child) watchParent() error {
+	sp.parentPid = os.Getppid()
+	proc, err := os.FindProcess(sp.parentPid)
 	if err != nil {
-		return fmt.Errorf("master process: %s", err)
+		return fmt.Errorf("parent process: %s", err)
 	}
-	sp.masterProc = proc
+	sp.parentProc = proc
 	go func() {
-		//send signal 0 to master process forever
+		//send signal 0 to parent process forever
 		for {
 			//should not error as long as the process is alive
-			if _, err := GetWin32Proc(int32(sp.masterPid)); err != nil {
+			if _, err := GetWin32Proc(int32(sp.parentPid)); err != nil {
 				os.Exit(1)
 			}
 			time.Sleep(2 * time.Second)

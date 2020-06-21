@@ -29,7 +29,7 @@ type State struct {
 	StartedAt time.Time
 	//Listener is the first net.Listener in Listeners
 	Listener net.Listener
-	//Listeners are the set of acquired sockets by the master
+	//Listeners are the set of acquired sockets by the parent
 	//process. These are all passed into this program in the
 	//same order they are specified in Config.Addresses.
 	Listeners []net.Listener
@@ -44,19 +44,19 @@ type State struct {
 	BinPath string
 }
 
-//a overseer slave process
+//a overseer child process
 
-type slave struct {
+type child struct {
 	*Config
 	id         string
 	listeners  []*overseerListener
-	masterPid  int
-	masterProc *os.Process
+	parentPid  int
+	parentProc *os.Process
 	state      State
 }
 
-func (sp *slave) run() error {
-	sp.id = os.Getenv(envSlaveID)
+func (sp *child) run() error {
+	sp.id = os.Getenv(envChildID)
 	sp.debugf("run")
 	sp.state.Enabled = true
 	sp.state.ID = os.Getenv(envBinID)
@@ -78,7 +78,7 @@ func (sp *slave) run() error {
 	return nil
 }
 
-func (sp *slave) initFileDescriptors() error {
+func (sp *child) initFileDescriptors() error {
 	//inspect file descriptors
 	numFDs, err := strconv.Atoi(os.Getenv(envNumFDs))
 	if err != nil {
@@ -102,26 +102,26 @@ func (sp *slave) initFileDescriptors() error {
 	return nil
 }
 
-func (sp *slave) watchSignal() {
+func (sp *child) watchSignal() {
 	signals := make(chan os.Signal)
 	signal.Notify(signals, sp.Config.RestartSignal)
 	go func() {
 		<-signals
 		signal.Stop(signals)
 		sp.debugf("graceful shutdown requested")
-		//master wants to restart,
+		//parent wants to restart,
 		close(sp.state.GracefulShutdown)
-		//release any sockets and notify master
+		//release any sockets and notify parent
 		if len(sp.listeners) > 0 {
 			//perform graceful shutdown
 			for _, l := range sp.listeners {
 				l.release(sp.Config.TerminateTimeout)
 			}
-			//signal release of held sockets, allows master to start
+			//signal release of held sockets, allows parent to start
 			//a new process before this child has actually exited.
 			//early restarts not supported with restarts disabled.
 			if !sp.NoRestart {
-				sp.masterProc.Signal(SIGUSR1)
+				sp.parentProc.Signal(SIGUSR1)
 			}
 			//listeners should be waiting on connections to close...
 		}
@@ -134,20 +134,20 @@ func (sp *slave) watchSignal() {
 	}()
 }
 
-func (sp *slave) triggerRestart() {
-	if err := sp.masterProc.Signal(sp.Config.RestartSignal); err != nil {
+func (sp *child) triggerRestart() {
+	if err := sp.parentProc.Signal(sp.Config.RestartSignal); err != nil {
 		os.Exit(1)
 	}
 }
 
-func (sp *slave) debugf(f string, args ...interface{}) {
+func (sp *child) debugf(f string, args ...interface{}) {
 	if sp.Config.Debug {
-		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
+		log.Printf("[overseer child#"+sp.id+"] "+f, args...)
 	}
 }
 
-func (sp *slave) warnf(f string, args ...interface{}) {
+func (sp *child) warnf(f string, args ...interface{}) {
 	if sp.Config.Debug || !sp.Config.NoWarn {
-		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
+		log.Printf("[overseer child#"+sp.id+"] "+f, args...)
 	}
 }
