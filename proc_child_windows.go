@@ -55,17 +55,17 @@ type Win32_Process struct {
 }
 
 func (cp *child) watchParent() error {
-	sp.parentPid = os.Getppid()
-	proc, err := os.FindProcess(sp.parentPid)
+	cp.parentPid = os.Getppid()
+	proc, err := os.FindProcess(cp.parentPid)
 	if err != nil {
 		return fmt.Errorf("parent process: %s", err)
 	}
-	sp.parentProc = proc
+	cp.parentProc = proc
 	go func() {
 		//send signal 0 to parent process forever
 		for {
 			//should not error as long as the process is alive
-			if _, err := GetWin32Proc(int32(sp.parentPid)); err != nil {
+			if _, err := GetWin32Proc(int32(cp.parentPid)); err != nil {
 				os.Exit(1)
 			}
 			time.Sleep(2 * time.Second)
