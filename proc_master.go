@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -27,10 +26,9 @@ type master struct {
 	slaveID             int
 	slaveCmd            *exec.Cmd
 	slaveExtraFiles     []*os.File
-	binPath, tmpBinPath string
+	binPath             string
 	binPerms            os.FileMode
 	binHash             []byte
-	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
 	restarted           chan bool
@@ -47,7 +45,7 @@ func (mp *master) run() error {
 	}
 	if mp.Config.Fetcher != nil {
 		if err := mp.Config.Fetcher.Init(); err != nil {
-			mp.warnf("fetcher init failed (%s). fetcher disabled.", err)
+			mp.warnf("fetcher init failed (%w). fetcher disabled.", err)
 			mp.Config.Fetcher = nil
 		}
 	}
@@ -67,11 +65,11 @@ func (mp *master) checkBinary() error {
 	//get path to binary and confirm its writable
 	binPath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to find binary path (%s)", err)
+		return fmt.Errorf("failed to find binary path (%w)", err)
 	}
 	mp.binPath = binPath
 	if info, err := os.Stat(binPath); err != nil {
-		return fmt.Errorf("failed to stat binary (%s)", err)
+		return fmt.Errorf("failed to stat binary (%w)", err)
 	} else if info.Size() == 0 {
 		return fmt.Errorf("binary file is empty")
 	} else {
@@ -80,7 +78,7 @@ func (mp *master) checkBinary() error {
 	}
 	f, err := os.Open(binPath)
 	if err != nil {
-		return fmt.Errorf("cannot read binary (%s)", err)
+		return fmt.Errorf("cannot read binary (%w)", err)
 	}
 	//initial hash of file
 	hash := sha1.New()
@@ -90,10 +88,10 @@ func (mp *master) checkBinary() error {
 	//test bin<->tmpbin moves
 	if mp.Config.Fetcher != nil {
 		if err := move(tmpBinPath, mp.binPath); err != nil {
-			return fmt.Errorf("cannot move binary (%s)", err)
+			return fmt.Errorf("cannot move binary (%w)", err)
 		}
 		if err := move(mp.binPath, tmpBinPath); err != nil {
-			return fmt.Errorf("cannot move binary back (%s)", err)
+			return fmt.Errorf("cannot move binary back (%w)", err)
 		}
 	}
 	return nil
@@ -146,7 +144,7 @@ func (mp *master) handleSignal(s os.Signal) {
 func (mp *master) sendSignal(s os.Signal) {
 	if mp.slaveCmd != nil && mp.slaveCmd.Process != nil {
 		if err := mp.slaveCmd.Process.Signal(s); err != nil {
-			mp.debugf("signal failed (%s), assuming slave process died unexpectedly", err)
+			mp.debugf("signal failed (%w), assuming slave process died unexpectedly", err)
 			os.Exit(1)
 		}
 	}
@@ -157,7 +155,7 @@ func (mp *master) retreiveFileDescriptors() error {
 	for i, addr := range mp.Config.Addresses {
 		a, err := net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
-			return fmt.Errorf("Invalid address %s (%s)", addr, err)
+			return fmt.Errorf("invalid address %s (%w)", addr, err)
 		}
 		l, err := net.ListenTCP("tcp", a)
 		if err != nil {
@@ -165,10 +163,10 @@ func (mp *master) retreiveFileDescriptors() error {
 		}
 		f, err := l.File()
 		if err != nil {
-			return fmt.Errorf("Failed to retreive fd for: %s (%s)", addr, err)
+			return fmt.Errorf("failed to retreive fd for: %s (%w)", addr, err)
 		}
 		if err := l.Close(); err != nil {
-			return fmt.Errorf("Failed to close listener for: %s (%s)", addr, err)
+			return fmt.Errorf("failed to close listener for: %s (%w)", addr, err)
 		}
 		mp.slaveExtraFiles[i] = f
 	}
@@ -183,7 +181,7 @@ func (mp *master) fetchLoop() {
 		t0 := time.Now()
 		mp.fetch()
 		//duration fetch of fetch
-		diff := time.Now().Sub(t0)
+		diff := time.Since(t0)
 		if diff < min {
 			delay := min - diff
 			//ensures at least MinFetchInterval delay.
@@ -202,7 +200,7 @@ func (mp *master) fetch() {
 	}
 	reader, err := mp.Fetcher.Fetch()
 	if err != nil {
-		mp.debugf("failed to get latest version: %s", err)
+		mp.debugf("failed to get latest version: %w", err)
 		return
 	}
 	if reader == nil {
@@ -220,7 +218,7 @@ func (mp *master) fetch() {
 	}
 	tmpBin, err := os.OpenFile(tmpBinPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
-		mp.warnf("failed to open temp binary: %s", err)
+		mp.warnf("failed to open temp binary: %w", err)
 		return
 	}
 	defer func() {
@@ -233,7 +231,7 @@ func (mp *master) fetch() {
 	//write to a temp file
 	_, err = io.Copy(tmpBin, reader)
 	if err != nil {
-		mp.warnf("failed to write temp binary: %s", err)
+		mp.warnf("failed to write temp binary: %w", err)
 		return
 	}
 	//compare hash
@@ -244,25 +242,25 @@ func (mp *master) fetch() {
 	}
 	//copy permissions
 	if err := chmod(tmpBin, mp.binPerms); err != nil {
-		mp.warnf("failed to make temp binary executable: %s", err)
+		mp.warnf("failed to make temp binary executable: %w", err)
 		return
 	}
 	if err := chown(tmpBin, uid, gid); err != nil {
-		mp.warnf("failed to change owner of binary: %s", err)
+		mp.warnf("failed to change owner of binary: %w", err)
 		return
 	}
 	if _, err := tmpBin.Stat(); err != nil {
-		mp.warnf("failed to stat temp binary: %s", err)
+		mp.warnf("failed to stat temp binary: %w", err)
 		return
 	}
 	tmpBin.Close()
 	if _, err := os.Stat(tmpBinPath); err != nil {
-		mp.warnf("failed to stat temp binary by path: %s", err)
+		mp.warnf("failed to stat temp binary by path: %w", err)
 		return
 	}
 	if mp.Config.PreUpgrade != nil {
 		if err := mp.Config.PreUpgrade(tmpBinPath); err != nil {
-			mp.warnf("user cancelled upgrade: %s", err)
+			mp.warnf("user cancelled upgrade: %w", err)
 			return
 		}
 	}
@@ -284,7 +282,7 @@ func (mp *master) fetch() {
 	tokenOut, err := cmd.CombinedOutput()
 	returned = true
 	if err != nil {
-		mp.warnf("failed to run temp binary: %s (%s) output \"%s\"", err, tmpBinPath, tokenOut)
+		mp.warnf("failed to run temp binary: %w (%s) output \"%s\"", err, tmpBinPath, tokenOut)
 		return
 	}
 	if tokenIn != string(tokenOut) {
@@ -293,7 +291,7 @@ func (mp *master) fetch() {
 	}
 	//overwrite!
 	if err := move(mp.binPath, tmpBinPath); err != nil {
-		mp.warnf("failed to overwrite binary: %s", err)
+		mp.warnf("failed to overwrite binary: %w", err)
 		return
 	}
 	mp.debugf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
@@ -303,7 +301,6 @@ func (mp *master) fetch() {
 		mp.triggerRestart()
 	}
 	//and keep fetching...
-	return
 }
 
 func (mp *master) triggerRestart() {
@@ -363,7 +360,7 @@ func (mp *master) fork() error {
 	//include socket files
 	cmd.ExtraFiles = mp.slaveExtraFiles
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("Failed to start slave process: %s", err)
+		return fmt.Errorf("failed to start slave process: %w", err)
 	}
 	//was scheduled to restart, notify success
 	if mp.restarting {

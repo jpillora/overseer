@@ -34,7 +34,7 @@ func move(dst, src string) error {
 	R := func(s string) string { return replShellMeta.Replace(syscall.EscapeArg(s)) }
 	cmd := exec.Command("cmd", "/c", `move /y `+R(src)+` `+R(dst))
 	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %q: %v", cmd.Args, bytes.TrimSpace(b), err)
+		return fmt.Errorf("%v: %q: %w", cmd.Args, bytes.TrimSpace(b), err)
 	}
 	return nil
 }

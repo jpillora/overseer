@@ -51,7 +51,7 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 	//status check using HEAD
 	resp, err := http.Head(h.URL)
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -74,7 +74,7 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 	//binary fetch using GET
 	resp, err = http.Get(h.URL)
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET request failed (status code %d)", resp.StatusCode)

@@ -99,9 +99,9 @@ func Run(c Config) {
 	err := runErr(&c)
 	if err != nil {
 		if c.Required {
-			log.Fatalf("[overseer] %s", err)
+			log.Fatalf("[overseer] %+v", err)
 		} else if c.Debug || !c.NoWarn {
-			log.Printf("[overseer] disabled. run failed: %s", err)
+			log.Printf("[overseer] disabled. run failed: %+v", err)
 		}
 		c.Program(DisabledState)
 		return

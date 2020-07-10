@@ -3,6 +3,7 @@ package fetcher
 import (
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -46,10 +47,10 @@ func (h *Github) defaultAsset(filename string) bool {
 func (h *Github) Init() error {
 	//apply defaults
 	if h.User == "" {
-		return fmt.Errorf("User required")
+		return errors.New("user required")
 	}
 	if h.Repo == "" {
-		return fmt.Errorf("Repo required")
+		return errors.New("repo required")
 	}
 	if h.Asset == nil {
 		h.Asset = h.defaultAsset
@@ -73,7 +74,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 	//check release status
 	resp, err := http.Get(h.releaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("release info request failed (%s)", err)
+		return nil, fmt.Errorf("release info request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
@@ -82,7 +83,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 	//clear assets
 	h.latestRelease.Assets = nil
 	if err := json.NewDecoder(resp.Body).Decode(&h.latestRelease); err != nil {
-		return nil, fmt.Errorf("invalid request info (%s)", err)
+		return nil, fmt.Errorf("invalid request info (%w)", err)
 	}
 	resp.Body.Close()
 	//find appropriate asset
@@ -100,7 +101,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 	req, _ := http.NewRequest("HEAD", assetURL, nil)
 	resp, err = http.DefaultTransport.RoundTrip(req)
 	if err != nil {
-		return nil, fmt.Errorf("release location request failed (%s)", err)
+		return nil, fmt.Errorf("release location request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -110,12 +111,12 @@ func (h *Github) Fetch() (io.Reader, error) {
 	//pseudo-HEAD request
 	req, err = http.NewRequest("GET", s3URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("release location url error (%s)", err)
+		return nil, fmt.Errorf("release location url error (%w)", err)
 	}
 	req.Header.Set("Range", "bytes=0-0") // HEAD not allowed so we request for 1 byte
 	resp, err = http.DefaultTransport.RoundTrip(req)
 	if err != nil {
-		return nil, fmt.Errorf("release location request failed (%s)", err)
+		return nil, fmt.Errorf("release location request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
@@ -128,7 +129,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 	//get binary request
 	resp, err = http.Get(s3URL)
 	if err != nil {
-		return nil, fmt.Errorf("release binary request failed (%s)", err)
+		return nil, fmt.Errorf("release binary request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
