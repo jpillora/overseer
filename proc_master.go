@@ -292,7 +292,7 @@ func (mp *master) fetch() {
 		return
 	}
 	//overwrite!
-	if err := move(mp.binPath, tmpBinPath); err != nil {
+	if err := overwrite(mp.binPath, tmpBinPath); err != nil {
 		mp.warnf("failed to overwrite binary: %s", err)
 		return
 	}
