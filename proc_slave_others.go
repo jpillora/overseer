@@ -28,3 +28,7 @@ func (sp *slave) watchParent() error {
 	}()
 	return nil
 }
+
+func overwrite(dst, src string) error {
+	return move(dst, src)
+}
