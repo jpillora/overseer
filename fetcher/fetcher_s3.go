@@ -34,7 +34,6 @@ type S3 struct {
 	//GetTimeout defaults to 5 minutes
 	GetTimeout time.Duration
 	//interal state
-	client   *http.Client
 	delay    bool
 	lastETag string
 }
@@ -94,7 +93,7 @@ func (s *S3) Fetch() (io.Reader, error) {
 	c.Timeout = s.HeadTimeout
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HEAD request failed (%s)", resp.Status)
@@ -112,7 +111,7 @@ func (s *S3) Fetch() (io.Reader, error) {
 	c.Timeout = s.GetTimeout
 	resp, err = c.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET request failed (%s)", resp.Status)

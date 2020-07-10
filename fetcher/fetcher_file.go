@@ -23,7 +23,7 @@ type File struct {
 // Init sets the Path and Interval options
 func (f *File) Init() error {
 	if f.Path == "" {
-		return fmt.Errorf("Path required")
+		return errors.New("path required")
 	}
 	if f.Interval < 1*time.Second {
 		f.Interval = 1 * time.Second
@@ -88,12 +88,12 @@ func (f *File) updateHash() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("Open file error: %s", err)
+		return fmt.Errorf("open file error: %w", err)
 	}
 	defer file.Close()
 	s, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("Get file stat error: %s", err)
+		return fmt.Errorf("get file stat error: %w", err)
 	}
 	f.hash = fmt.Sprintf("%d|%d", s.ModTime().UnixNano(), s.Size())
 	return nil

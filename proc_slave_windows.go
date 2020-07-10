@@ -5,9 +5,10 @@ package overseer
 import (
 	"context"
 	"fmt"
-	"github.com/StackExchange/wmi"
 	"os"
 	"time"
+
+	"github.com/StackExchange/wmi"
 )
 
 var (
@@ -57,7 +58,7 @@ func (sp *slave) watchParent() error {
 	sp.masterPid = os.Getppid()
 	proc, err := os.FindProcess(sp.masterPid)
 	if err != nil {
-		return fmt.Errorf("master process: %s", err)
+		return fmt.Errorf("master process: %w", err)
 	}
 	sp.masterProc = proc
 	go func() {

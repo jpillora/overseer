@@ -145,9 +145,3 @@ func (sp *slave) debugf(f string, args ...interface{}) {
 		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
 	}
 }
-
-func (sp *slave) warnf(f string, args ...interface{}) {
-	if sp.Config.Debug || !sp.Config.NoWarn {
-		log.Printf("[overseer slave#"+sp.id+"] "+f, args...)
-	}
-}
