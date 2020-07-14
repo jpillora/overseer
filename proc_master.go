@@ -13,13 +13,14 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
 	"time"
 )
 
-var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token())
+var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token()+extension())
 
 //a overseer master process
 type master struct {
@@ -425,4 +426,13 @@ func token() string {
 	buff := make([]byte, 8)
 	rand.Read(buff)
 	return hex.EncodeToString(buff)
+}
+
+// On Windows, include the .exe extension, noop otherwise.
+func extension() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+
+	return ""
 }
