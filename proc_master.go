@@ -66,7 +66,7 @@ func (mp *master) run() error {
 
 func (mp *master) checkBinary() error {
 	//get path to binary and confirm its writable
-	binPath, err := os.Executable()
+	binPath, err := filepath.Abs(os.Args[0])
 	if err != nil {
 		return fmt.Errorf("failed to find binary path (%s)", err)
 	}
