@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"time"
@@ -22,6 +23,20 @@ const (
 	envBinCheck       = "OVERSEER_BIN_CHECK"
 	envBinCheckLegacy = "GO_UPGRADE_BIN_CHECK"
 )
+
+type ForkResource struct {
+	Uid        string
+	MasterPid  int
+	MasterProc *os.Process
+	State      State
+	Fds        []uintptr
+}
+
+type Graceful interface {
+	OnOver()                                                           //当收到停止进程的信号s时
+	SafeHandler(state *State)                                          //能阻塞等待所有任务结束才退出的主进程
+	Init(resource ForkResource, config Config) ([]net.Listener, error) //进程初始化，参数为从主进程fork的资源
+}
 
 // Config defines overseer's run-time configuration
 type Config struct {
@@ -59,6 +74,8 @@ type Config struct {
 	NoRestartAfterFetch bool
 	//Fetcher will be used to fetch binaries.
 	Fetcher fetcher.Interface
+
+	Grace Graceful
 }
 
 func validate(c *Config) error {

@@ -48,58 +48,70 @@ type State struct {
 
 type slave struct {
 	*Config
+	state      *State
 	id         string
-	listeners  []*overseerListener
-	masterPid  int
 	masterProc *os.Process
-	state      State
 }
 
 func (sp *slave) run() error {
-	sp.id = os.Getenv(envSlaveID)
 	sp.debugf("run")
-	sp.state.Enabled = true
-	sp.state.ID = os.Getenv(envBinID)
-	sp.state.StartedAt = time.Now()
-	sp.state.Address = sp.Config.Address
-	sp.state.Addresses = sp.Config.Addresses
-	sp.state.GracefulShutdown = make(chan bool, 1)
-	sp.state.BinPath = os.Getenv(envBinPath)
-	if err := sp.watchParent(); err != nil {
+	sp.id = os.Getenv(envSlaveID)
+	if sp.Grace == nil {
+		sp.Grace = &tcpSlave{}
+	}
+	pid, proc, err := sp.watchParent()
+	if err != nil {
 		return err
 	}
-	if err := sp.initFileDescriptors(); err != nil {
+	sp.masterProc = proc
+	fds, err := sp.initFileDescriptors()
+	if err != nil {
 		return err
+	}
+	resource := ForkResource{
+		Uid:        os.Getenv(envSlaveID),
+		MasterPid:  pid,
+		MasterProc: proc,
+		Fds:        fds,
+	}
+
+	listeners, err := sp.Grace.Init(resource, *sp.Config)
+	if err != nil {
+		return err
+	}
+	state := &State{
+		Enabled:          true,
+		ID:               os.Getenv(envBinID),
+		StartedAt:        time.Now(),
+		Address:          sp.Config.Address,
+		Addresses:        sp.Config.Addresses,
+		GracefulShutdown: make(chan bool, 1),
+		BinPath:          os.Getenv(envBinPath),
+		Listeners:        listeners,
+	}
+	if len(listeners) > 0 {
+		state.Listener = listeners[0]
 	}
 	sp.watchSignal()
 	//run program with state
 	sp.debugf("start program")
-	sp.Config.Program(sp.state)
+
+	sp.state = state
+	sp.Grace.SafeHandler(state)
 	return nil
 }
 
-func (sp *slave) initFileDescriptors() error {
+func (sp *slave) initFileDescriptors() ([]uintptr, error) {
 	//inspect file descriptors
 	numFDs, err := strconv.Atoi(os.Getenv(envNumFDs))
 	if err != nil {
-		return fmt.Errorf("invalid %s integer", envNumFDs)
+		return nil, fmt.Errorf("invalid %s integer", envNumFDs)
 	}
-	sp.listeners = make([]*overseerListener, numFDs)
-	sp.state.Listeners = make([]net.Listener, numFDs)
+	fds := make([]uintptr, 0)
 	for i := 0; i < numFDs; i++ {
-		f := os.NewFile(uintptr(3+i), "")
-		l, err := net.FileListener(f)
-		if err != nil {
-			return fmt.Errorf("failed to inherit file descriptor: %d", i)
-		}
-		u := newOverseerListener(l)
-		sp.listeners[i] = u
-		sp.state.Listeners[i] = u
+		fds = append(fds, uintptr(3+i))
 	}
-	if len(sp.state.Listeners) > 0 {
-		sp.state.Listener = sp.state.Listeners[0]
-	}
-	return nil
+	return fds, nil
 }
 
 func (sp *slave) watchSignal() {
@@ -112,19 +124,7 @@ func (sp *slave) watchSignal() {
 		//master wants to restart,
 		close(sp.state.GracefulShutdown)
 		//release any sockets and notify master
-		if len(sp.listeners) > 0 {
-			//perform graceful shutdown
-			for _, l := range sp.listeners {
-				l.release(sp.Config.TerminateTimeout)
-			}
-			//signal release of held sockets, allows master to start
-			//a new process before this child has actually exited.
-			//early restarts not supported with restarts disabled.
-			if !sp.NoRestart {
-				sp.masterProc.Signal(SIGUSR1)
-			}
-			//listeners should be waiting on connections to close...
-		}
+		sp.Grace.OnOver()
 		//start death-timer
 		go func() {
 			time.Sleep(sp.Config.TerminateTimeout)
