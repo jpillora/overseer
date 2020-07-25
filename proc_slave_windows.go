@@ -55,24 +55,23 @@ type Win32_Process struct {
 	WorkingSetSize        uint64
 }
 
-func (sp *slave) watchParent() error {
-	sp.masterPid = os.Getppid()
-	proc, err := os.FindProcess(sp.masterPid)
+func (sp *slave)  watchParent() (int, *os.Process, error){
+	pid := os.Getppid()
+	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("master process: %s", err)
 	}
-	sp.masterProc = proc
 	go func() {
 		//send signal 0 to master process forever
 		for {
 			//should not error as long as the process is alive
-			if _, err := GetWin32Proc(int32(sp.masterPid)); err != nil {
+			if _, err := GetWin32Proc(int32(pid)); err != nil {
 				os.Exit(1)
 			}
 			time.Sleep(2 * time.Second)
 		}
 	}()
-	return nil
+	return pid, proc
 }
 
 func GetWin32Proc(pid int32) ([]Win32_Process, error) {
