@@ -59,7 +59,7 @@ func (sp *slave)  watchParent() (int, *os.Process, error){
 	pid := os.Getppid()
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("master process: %s", err)
+		return 0, nil, fmt.Errorf("master process: %s", err)
 	}
 	go func() {
 		//send signal 0 to master process forever
@@ -71,7 +71,7 @@ func (sp *slave)  watchParent() (int, *os.Process, error){
 			time.Sleep(2 * time.Second)
 		}
 	}()
-	return pid, proc
+	return pid, proc, nil
 }
 
 func GetWin32Proc(pid int32) ([]Win32_Process, error) {
