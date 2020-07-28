@@ -18,8 +18,9 @@ type HTTP struct {
 	Interval     time.Duration
 	CheckHeaders []string
 	//internal state
-	delay bool
-	lasts map[string]string
+	delay   bool
+	lasts   map[string]string
+	URLFunc func() (URL string, err error)
 }
 
 //if any of these change, the binary has been updated
@@ -28,8 +29,8 @@ var defaultHTTPCheckHeaders = []string{"ETag", "If-Modified-Since", "Last-Modifi
 // Init validates the provided config
 func (h *HTTP) Init() error {
 	//apply defaults
-	if h.URL == "" {
-		return fmt.Errorf("URL required")
+	if h.URL == "" && h.URLFunc == nil {
+		return fmt.Errorf("URL or URLFunc required")
 	}
 	h.lasts = map[string]string{}
 	if h.Interval == 0 {
@@ -42,14 +43,23 @@ func (h *HTTP) Init() error {
 }
 
 // Fetch the binary from the provided URL
-func (h *HTTP) Fetch() (io.Reader, error) {
+func (h *HTTP) Fetch() (r io.Reader, err error) {
 	//delay fetches after first
 	if h.delay {
 		time.Sleep(h.Interval)
 	}
 	h.delay = true
+
+	URL := h.URL
+
+	if URL == "" {
+		if URL, err = h.URLFunc(); err != nil {
+			return
+		}
+	}
+
 	//status check using HEAD
-	resp, err := http.Head(h.URL)
+	resp, err := http.Head(URL)
 	if err != nil {
 		return nil, fmt.Errorf("HEAD request failed (%s)", err)
 	}
@@ -72,7 +82,7 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 		return nil, nil //skip, file match
 	}
 	//binary fetch using GET
-	resp, err = http.Get(h.URL)
+	resp, err = http.Get(URL)
 	if err != nil {
 		return nil, fmt.Errorf("GET request failed (%s)", err)
 	}
@@ -80,7 +90,7 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("GET request failed (status code %d)", resp.StatusCode)
 	}
 	//extract gz files
-	if strings.HasSuffix(h.URL, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
+	if strings.HasSuffix(URL, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
 		return gzip.NewReader(resp.Body)
 	}
 	//success!

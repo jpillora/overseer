@@ -132,6 +132,27 @@ func main() {
 }
 ```
 
+Using `URLFunc` Attribute:
+
+```go
+func main() {
+	overseer.Run(overseer.Config{
+		Program: prog,
+		Fetcher: &fetcher.HTTP{
+			URLFunc: func() (URL string, err ERROR) {
+				t := time.Now()
+				nows := fmt.Printf(
+					"%d-%02d-%02d_%02d%02d%02d",
+					t.Year(), t.Month(), t.Day(),
+					t.Hour(), t.Minute(), t.Second(),
+				)
+				return "http://localhost:4000/binaries/myapp-" + nows, nil
+			},
+		},
+	})
+}
+```
+
 Your binary will be upgraded though it will require manual restart from the user, suitable for creating self-upgrading command-line applications.
 
 #### Multi-platform binaries using a dynamic fetch `URL`
