@@ -124,6 +124,12 @@ func (sp *slave) watchSignal() {
 				sp.masterProc.Signal(SIGUSR1)
 			}
 			//listeners should be waiting on connections to close...
+			//process can wait sometime after all listeners released for some reason,
+			//such as wait associated async tasks to finish.
+			timer := time.NewTimer(sp.Config.ReleaseConnTimeout * time.Second)
+			select {
+			case <-timer.C:
+			}
 		}
 		//start death-timer
 		go func() {

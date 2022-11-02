@@ -36,6 +36,11 @@ type Config struct {
 	Addresses []string
 	//RestartSignal will manually trigger a graceful restart. Defaults to SIGUSR2.
 	RestartSignal os.Signal
+	//ReleaseConnTimeout controls how long overseer should
+	//wait for the process to release connection. After this
+	//timeout, overseer will release connections of old child process, in order to
+	//guarantee associated async tasks to finish. Default is 0.
+	ReleaseConnTimeout time.Duration
 	//TerminateTimeout controls how long overseer should
 	//wait for the program to terminate itself. After this
 	//timeout, overseer will issue a SIGKILL.
