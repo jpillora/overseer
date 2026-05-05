@@ -499,7 +499,18 @@ func (mp *master) fork() error {
 	}
 	mp.restartMux.Unlock()
 	if wasRestarting {
-		mp.restarted <- true
+		// Non-blocking: if startRestart already exited via TerminateTimeout,
+		// nobody is reading mp.restarted. A blocking send here would hang the
+		// master forever — the worker is already running, no further progress
+		// is needed. Drop the notification in that case. The channel is
+		// unbuffered and only one restart can be in-flight at a time
+		// (guarded by mp.restarting), so racing a real receiver is not
+		// possible: startRestart enters its select before this send can run
+		// (it kicks off the worker death we are responding to).
+		select {
+		case mp.restarted <- true:
+		default:
+		}
 	}
 	//convert wait into channel
 	cmdwait := make(chan error)

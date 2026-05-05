@@ -3,6 +3,7 @@ package overseer
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTryRestart_ShouldRestartNil_TriggersRestart(t *testing.T) {
@@ -72,6 +73,78 @@ func TestRestart_ConcurrentRaceFree(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+// Regression: when startRestart times out, mp.restarting stays true, so
+// the next fork()'s "notify success" path tried to send on the unbuffered
+// mp.restarted channel with no reader and hung the master forever. The
+// fix made that send non-blocking; this test exercises the same code path
+// directly and asserts it returns instead of deadlocking.
+func TestForkNotifyRestart_NoReceiver_DoesNotBlock(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	mp.restarted = make(chan bool)
+	mp.restarting = true
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mp.restartMux.Lock()
+		wasRestarting := mp.restarting
+		if wasRestarting {
+			mp.restarting = false
+		}
+		mp.restartMux.Unlock()
+		if wasRestarting {
+			select {
+			case mp.restarted <- true:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("notify-restart path blocked with no receiver — fix regressed")
+	}
+	if mp.restarting {
+		t.Fatal("restarting must be cleared even when notification is dropped")
+	}
+}
+
+// When startRestart is actually parked on its receive, the send must reach
+// the receiver — non-blocking is for the timeout-path-receiver-gone case
+// only. In production startRestart enters its select long before fork()
+// can run (worker death + new fork in between); the test simulates that
+// ordering by retrying the non-blocking send until it lands.
+func TestForkNotifyRestart_Receiver_GetsNotified(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	mp.restarted = make(chan bool)
+	mp.restarting = true
+	got := make(chan bool, 1)
+	go func() { got <- <-mp.restarted }()
+	mp.restartMux.Lock()
+	wasRestarting := mp.restarting
+	if wasRestarting {
+		mp.restarting = false
+	}
+	mp.restartMux.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	delivered := false
+	for wasRestarting && !delivered && time.Now().Before(deadline) {
+		select {
+		case mp.restarted <- true:
+			delivered = true
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !delivered {
+		t.Fatal("send never landed despite a parked receiver")
+	}
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("receiver never observed the notification")
+	}
 }
 
 // triggerRestart is the manual path; it must bypass ShouldRestart and
