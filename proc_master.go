@@ -110,8 +110,10 @@ func (mp *master) setupSignalling() {
 	//updater-forker comms
 	mp.restarted = make(chan bool)
 	mp.descriptorsReleased = make(chan bool)
-	//read all master process signals
-	signals := make(chan os.Signal)
+	//read all master process signals. Buffer of 1 satisfies signal.Notify's
+	//requirement that the channel never block; the actual queueing for the
+	//fork window happens in handleSignal under workerMux.
+	signals := make(chan os.Signal, 1)
 	signal.Notify(signals)
 	go func() {
 		for s := range signals {

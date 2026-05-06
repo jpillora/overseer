@@ -109,7 +109,7 @@ func (sp *worker) initFileDescriptors() error {
 }
 
 func (sp *worker) watchSignal() {
-	signals := make(chan os.Signal)
+	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, sp.Config.RestartSignal)
 	go func() {
 		<-signals
