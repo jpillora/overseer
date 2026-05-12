@@ -15,9 +15,9 @@ import (
 	"github.com/jpillora/s3"
 )
 
-//S3 uses authenticated HEAD requests to poll the status of a given
-//object. If it detects this file has been updated, it will perform
-//an object GET and return its io.Reader stream.
+// S3 uses authenticated HEAD requests to poll the status of a given
+// object. If it detects this file has been updated, it will perform
+// an object GET and return its io.Reader stream.
 type S3 struct {
 	//Access key falls back to env AWS_ACCESS_KEY, then metadata
 	Access string

@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-//HTTP fetcher uses HEAD requests to poll the status of a given
-//file. If it detects this file has been updated, it will fetch
-//and return its io.Reader stream.
+// HTTP fetcher uses HEAD requests to poll the status of a given
+// file. If it detects this file has been updated, it will fetch
+// and return its io.Reader stream.
 type HTTP struct {
 	//URL to poll for new binaries
 	URL          string
@@ -22,7 +22,7 @@ type HTTP struct {
 	lasts map[string]string
 }
 
-//if any of these change, the binary has been updated
+// if any of these change, the binary has been updated
 var defaultHTTPCheckHeaders = []string{"ETag", "If-Modified-Since", "Last-Modified", "Content-Length"}
 
 // Init validates the provided config

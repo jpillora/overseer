@@ -18,7 +18,7 @@ func newOverseerListener(l net.Listener) *overseerListener {
 	}
 }
 
-//gracefully closing net.Listener
+// gracefully closing net.Listener
 type overseerListener struct {
 	net.Listener
 	closeError   error
@@ -51,7 +51,7 @@ func (l *overseerListener) Accept() (net.Conn, error) {
 	return uconn, nil
 }
 
-//non-blocking trigger close
+// non-blocking trigger close
 func (l *overseerListener) release(timeout time.Duration) {
 	//stop accepting connections - release fd
 	l.closeError = l.Listener.Close()
@@ -71,7 +71,7 @@ func (l *overseerListener) release(timeout time.Duration) {
 	}()
 }
 
-//blocking wait for close
+// blocking wait for close
 func (l *overseerListener) Close() error {
 	l.wg.Wait()
 	return l.closeError
@@ -84,7 +84,7 @@ func (l *overseerListener) File() *os.File {
 	return fl
 }
 
-//notifying on close net.Conn
+// notifying on close net.Conn
 type overseerConn struct {
 	net.Conn
 	wg     *sync.WaitGroup
