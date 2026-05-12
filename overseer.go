@@ -55,7 +55,7 @@ type Config struct {
 	PreUpgrade func(tempBinaryPath string) error
 	//Debug enables all [overseer] logs.
 	Debug bool
-	//NoWarn disables warning [overseer] logs.
+	//NoWarn disables info and warning [overseer] logs.
 	NoWarn bool
 	//NoRestart disables all restarts, this option essentially converts
 	//the RestartSignal into a "ShutdownSignal".

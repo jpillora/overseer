@@ -114,7 +114,7 @@ func (sp *worker) watchSignal() {
 	go func() {
 		<-signals
 		signal.Stop(signals)
-		sp.debugf("graceful shutdown requested")
+		sp.infof("graceful shutdown requested")
 		//master wants to restart,
 		close(sp.state.GracefulShutdown)
 		//release any sockets and notify master
@@ -134,7 +134,7 @@ func (sp *worker) watchSignal() {
 		//start death-timer
 		go func() {
 			time.Sleep(sp.Config.TerminateTimeout)
-			sp.debugf("timeout. forceful shutdown")
+			sp.infof("timeout. forceful shutdown")
 			os.Exit(1)
 		}()
 	}()
@@ -148,6 +148,12 @@ func (sp *worker) triggerRestart() {
 
 func (sp *worker) debugf(f string, args ...interface{}) {
 	if sp.Config.Debug {
+		log.Printf("[overseer worker#"+sp.id+"] "+f, args...)
+	}
+}
+
+func (sp *worker) infof(f string, args ...interface{}) {
+	if sp.Config.Debug || !sp.Config.NoWarn {
 		log.Printf("[overseer worker#"+sp.id+"] "+f, args...)
 	}
 }

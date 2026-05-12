@@ -358,7 +358,7 @@ func (mp *master) fetch() {
 		mp.warnf("failed to overwrite binary: %s", err)
 		return
 	}
-	mp.debugf("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
+	mp.infof("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
 	mp.binHash = newHash
 	//binary successfully replaced
 	if !mp.Config.NoRestartAfterFetch {
@@ -408,15 +408,15 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	mp.awaitingUSR1 = true
 	mp.signalledAt = time.Now()
 	mp.restartMux.Unlock()
-	mp.debugf("graceful restart triggered")
+	mp.infof("graceful restart triggered")
 	mp.sendSignal(mp.Config.RestartSignal) //ask nicely to terminate
 	select {
 	case <-mp.restarted:
 		//success
-		mp.debugf("restart success")
+		mp.infof("restart success")
 	case <-time.After(mp.TerminateTimeout):
 		//times up mr. process, we did ask nicely!
-		mp.debugf("graceful timeout, forcing exit")
+		mp.infof("graceful timeout (%s), forcing exit", mp.TerminateTimeout)
 		mp.sendSignal(os.Kill)
 	}
 }
@@ -432,7 +432,7 @@ func (mp *master) forkLoop() error {
 }
 
 func (mp *master) fork() error {
-	mp.debugf("starting %s", mp.binPath)
+	mp.infof("starting %s", mp.binPath)
 	cmd := exec.Command(mp.binPath)
 	//mark this new process as the "active" worker process.
 	//this process is assumed to be holding the socket files.
@@ -533,7 +533,7 @@ func (mp *master) fork() error {
 				}
 			}
 		}
-		mp.debugf("prog exited with %d", code)
+		mp.infof("prog exited with %d", code)
 		if stderrTail != nil && mp.Config.OnPanic != nil {
 			if snap := opanic.Scan(stderrTail.Bytes(), mp.debugf); snap != nil {
 				// Run synchronously with a bounded deadline: os.Exit below
@@ -577,6 +577,12 @@ func (mp *master) fork() error {
 
 func (mp *master) debugf(f string, args ...interface{}) {
 	if mp.Config.Debug {
+		log.Printf("[overseer master] "+f, args...)
+	}
+}
+
+func (mp *master) infof(f string, args ...interface{}) {
+	if mp.Config.Debug || !mp.Config.NoWarn {
 		log.Printf("[overseer master] "+f, args...)
 	}
 }
