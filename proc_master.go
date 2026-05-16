@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -472,6 +473,13 @@ func (mp *master) fork() error {
 	} else {
 		cmd.Stderr = os.Stderr
 	}
+	// Bound cmd.Wait after process exit. When cmd.Stderr is a non-*os.File
+	// (e.g. our MultiWriter wrapping stderrTail), Go's exec creates a pipe
+	// and runs an internal goroutine to drain it. Worker subprocesses that
+	// inherit fd 2 (the pipe's write-end) and outlive the worker keep that
+	// pipe open forever; without WaitDelay, cmd.Wait blocks waiting for an
+	// EOF that never arrives, and the master never spawns the next worker.
+	cmd.WaitDelay = mp.Config.WaitDelay
 	//include socket files
 	cmd.ExtraFiles = mp.workerExtraFiles
 	if err := cmd.Start(); err != nil {
@@ -523,17 +531,30 @@ func (mp *master) fork() error {
 	select {
 	case err := <-cmdwait:
 		//program exited before releasing descriptors
-		//proxy exit code out to master
+		//proxy exit code out to master. Prefer ProcessState (always set
+		//after the process exits) over the returned error, which may be
+		//wrapped — e.g. when WaitDelay force-closes I/O pipes, Wait returns
+		//a wrapper that doesn't directly type-assert to *exec.ExitError.
 		code := 0
-		if err != nil {
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+			if code < 0 && err != nil {
+				code = 1
+			}
+		} else if err != nil {
 			code = 1
-			if exiterr, ok := err.(*exec.ExitError); ok {
+			var exiterr *exec.ExitError
+			if errors.As(err, &exiterr) {
 				if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
 					code = status.ExitStatus()
 				}
 			}
 		}
 		mp.infof("prog exited with %d", code)
+		if err != nil && cmd.ProcessState != nil && cmd.ProcessState.Exited() &&
+			strings.Contains(err.Error(), "WaitDelay") {
+			mp.warnf("WaitDelay (%s) elapsed while draining I/O — a subprocess likely inherited the worker's stderr pipe", mp.Config.WaitDelay)
+		}
 		if stderrTail != nil && mp.Config.OnPanic != nil {
 			if snap := opanic.Scan(stderrTail.Bytes(), mp.debugf); snap != nil {
 				// Run synchronously with a bounded deadline: os.Exit below

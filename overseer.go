@@ -81,6 +81,13 @@ type Config struct {
 	//memory for panic detection. Only used when OnPanic is set. Defaults
 	//to 256 KiB.
 	StderrTailSize int
+	//WaitDelay bounds how long cmd.Wait blocks on the worker's stderr/stdout
+	//pipes after the process has exited. If a worker subprocess inherits the
+	//worker's pipe fd (e.g. via cmd.Stderr = os.Stderr where the worker's
+	//os.Stderr is itself the master→worker pipe) and outlives the worker,
+	//the pipe never EOFs and cmd.Wait hangs forever — blocking the master
+	//from spawning the next worker. Defaults to TerminateTimeout.
+	WaitDelay time.Duration
 }
 
 func validate(c *Config) error {
@@ -104,6 +111,9 @@ func validate(c *Config) error {
 	}
 	if c.MinFetchInterval <= 0 {
 		c.MinFetchInterval = 1 * time.Second
+	}
+	if c.WaitDelay <= 0 {
+		c.WaitDelay = c.TerminateTimeout
 	}
 	return nil
 }
