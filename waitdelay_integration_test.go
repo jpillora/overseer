@@ -8,10 +8,30 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// syncBuffer guards a bytes.Buffer used as cmd.Stdout: exec's pipe-copier
+// goroutine keeps writing while the hang-test reads it mid-Wait.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // Reproduces the master-hang bug: a worker subprocess inherits the worker's
 // fd 2 (the pipe to its MultiWriter parent) and outlives the worker. Without
@@ -20,7 +40,7 @@ import (
 // though the inherited pipe write-end is still held open by the grandchild.
 func TestCmdWait_StderrLeak_WithWaitDelay(t *testing.T) {
 	bin := buildStderrLeaker(t)
-	var stdout bytes.Buffer
+	var stdout syncBuffer
 	cmd := exec.Command(bin)
 	cmd.Stdin = nil
 	cmd.Stdout = &stdout
@@ -51,7 +71,7 @@ func TestCmdWait_StderrLeak_WithWaitDelay(t *testing.T) {
 // to verify it doesn't return within the same window the fixed path uses.
 func TestCmdWait_StderrLeak_WithoutWaitDelay_Hangs(t *testing.T) {
 	bin := buildStderrLeaker(t)
-	var stdout bytes.Buffer
+	var stdout syncBuffer
 	cmd := exec.Command(bin)
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.MultiWriter(io.Discard, &bytes.Buffer{})
@@ -85,7 +105,7 @@ func buildStderrLeaker(t *testing.T) string {
 // Best-effort cleanup: the leaker prints the grandchild PID to its stdout
 // before exec'ing into sleep, so we can target only the process this test
 // actually spawned. Falls back gracefully if the PID line never appeared.
-func killGrandchildByStdout(stdout *bytes.Buffer) {
+func killGrandchildByStdout(stdout *syncBuffer) {
 	line := strings.TrimSpace(stdout.String())
 	if line == "" {
 		return
