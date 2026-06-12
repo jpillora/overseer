@@ -168,9 +168,31 @@ func SanityCheck() {
 	}
 }
 
+// Info is a point-in-time snapshot of the master process's upgrade and
+// restart state, retrieved with MasterInfo.
+type Info struct {
+	//IsMaster reports whether this snapshot came from a master process.
+	//It is false in the worker and before Run.
+	IsMaster bool
+	//UpgradeStaged reports that the on-disk binary differs from the binary
+	//the current worker was forked from — an upgrade has been fetched and
+	//swapped into place but no restart has delivered it yet.
+	UpgradeStaged bool
+	//RestartPending reports that an automatic restart was deferred by
+	//Config.ShouldRestart and is being retried on each fetch loop iteration.
+	RestartPending bool
+	//ForceRequested reports that ForceNextRestart was called and the mark
+	//has not yet been consumed by a restart.
+	ForceRequested bool
+	//WorkerForks counts how many times the master has forked a worker.
+	WorkerForks int
+}
+
 // abstraction over master/worker
 var currentProcess interface {
 	triggerRestart()
+	forceNextRestart()
+	info() Info
 	run() error
 }
 
@@ -202,6 +224,28 @@ func Restart() {
 	if currentProcess != nil {
 		currentProcess.triggerRestart()
 	}
+}
+
+// ForceNextRestart marks the next restart attempt — typically the one
+// following the next successful fetch — to proceed even if
+// Config.ShouldRestart returns false. The mark is consumed when a restart
+// fires or a new worker is forked (any fork runs the current on-disk
+// binary, satisfying the request). Valid in the master process; no-op in
+// the worker.
+func ForceNextRestart() {
+	if currentProcess != nil {
+		currentProcess.forceNextRestart()
+	}
+}
+
+// MasterInfo returns a snapshot of the master's upgrade and restart state.
+// Valid in the master process; in the worker (or before Run) it returns a
+// zero Info with IsMaster=false.
+func MasterInfo() Info {
+	if currentProcess != nil {
+		return currentProcess.info()
+	}
+	return Info{}
 }
 
 // IsSupported returns whether overseer is supported on the current OS.

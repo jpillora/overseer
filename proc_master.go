@@ -46,6 +46,8 @@ type master struct {
 	signalledAt         time.Time
 	printCheckUpdate    bool
 	pendingRestart      bool
+	forceNext           bool
+	forkedHash          []byte
 }
 
 func (mp *master) run() error {
@@ -359,8 +361,12 @@ func (mp *master) fetch() {
 		mp.warnf("failed to overwrite binary: %s", err)
 		return
 	}
-	mp.infof("upgraded binary (%x -> %x)", mp.binHash[:12], newHash[:12])
+	//binHash is read by fork() and info() on other goroutines
+	mp.restartMux.Lock()
+	oldHash := mp.binHash
 	mp.binHash = newHash
+	mp.restartMux.Unlock()
+	mp.infof("upgraded binary (%x -> %x)", oldHash[:12], newHash[:12])
 	//binary successfully replaced
 	if !mp.Config.NoRestartAfterFetch {
 		mp.tryRestart()
@@ -381,6 +387,28 @@ func (mp *master) triggerRestart() {
 	mp.startRestart(false)
 }
 
+// forceNextRestart marks the next restart attempt to skip ShouldRestart;
+// backs the exported ForceNextRestart() function.
+func (mp *master) forceNextRestart() {
+	mp.restartMux.Lock()
+	mp.forceNext = true
+	mp.restartMux.Unlock()
+	mp.debugf("force next restart requested")
+}
+
+// info backs the exported MasterInfo() function.
+func (mp *master) info() Info {
+	mp.restartMux.Lock()
+	defer mp.restartMux.Unlock()
+	return Info{
+		IsMaster:       true,
+		UpgradeStaged:  mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash),
+		RestartPending: mp.pendingRestart,
+		ForceRequested: mp.forceNext,
+		WorkerForks:    mp.workerID,
+	}
+}
+
 // startRestart atomically claims ownership of the restart and, if claimed,
 // performs the graceful shutdown handshake. When checkShouldRestart is true
 // the caller is the fetch loop and ShouldRestart may defer the restart.
@@ -391,7 +419,7 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 		mp.restartMux.Unlock()
 		return
 	}
-	if checkShouldRestart && mp.Config.ShouldRestart != nil && !mp.Config.ShouldRestart() {
+	if checkShouldRestart && !mp.forceNext && mp.Config.ShouldRestart != nil && !mp.Config.ShouldRestart() {
 		if !mp.pendingRestart {
 			mp.debugf("restart deferred: ShouldRestart returned false")
 		}
@@ -399,7 +427,11 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 		mp.restartMux.Unlock()
 		return
 	}
+	if checkShouldRestart && mp.forceNext {
+		mp.debugf("restart forced, skipping ShouldRestart")
+	}
 	mp.pendingRestart = false
+	mp.forceNext = false
 	if mp.workerCmd == nil {
 		mp.debugf("no worker process")
 		mp.restartMux.Unlock()
@@ -444,17 +476,24 @@ func (mp *master) fork() error {
 	mp.workerMux.Lock()
 	mp.workerCmd = cmd
 	mp.workerMux.Unlock()
+	//this fork runs the current on-disk binary: record its hash so info()
+	//can report whether a later upgrade is staged but not yet delivered
+	mp.restartMux.Lock()
 	mp.workerID++
+	workerID := mp.workerID
+	mp.forkedHash = mp.binHash
+	binID := hex.EncodeToString(mp.binHash)
+	mp.restartMux.Unlock()
 	//provide the worker process with some state. Set both the new
 	//OVERSEER_WORKER_* and legacy OVERSEER_SLAVE_* names so a pre-rename
 	//child binary forked by a post-rename master still detects itself as a
 	//worker and reads its id.
 	e := os.Environ()
-	e = append(e, envBinID+"="+hex.EncodeToString(mp.binHash))
+	e = append(e, envBinID+"="+binID)
 	e = append(e, envBinPath+"="+mp.binPath)
-	e = append(e, envWorkerID+"="+strconv.Itoa(mp.workerID))
+	e = append(e, envWorkerID+"="+strconv.Itoa(workerID))
 	e = append(e, envIsWorker+"=1")
-	e = append(e, envSlaveID+"="+strconv.Itoa(mp.workerID))
+	e = append(e, envSlaveID+"="+strconv.Itoa(workerID))
 	e = append(e, envIsSlave+"=1")
 	e = append(e, envNumFDs+"="+strconv.Itoa(len(mp.workerExtraFiles)))
 	cmd.Env = e
@@ -507,6 +546,9 @@ func (mp *master) fork() error {
 		mp.restartedAt = time.Now()
 		mp.restarting = false
 	}
+	//any successful fork runs the on-disk binary, satisfying a force request
+	//latched while a restart was already in flight
+	mp.forceNext = false
 	mp.restartMux.Unlock()
 	if wasRestarting {
 		// Non-blocking: if startRestart already exited via TerminateTimeout,

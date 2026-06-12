@@ -163,3 +163,117 @@ func TestTriggerRestart_BypassesShouldRestart(t *testing.T) {
 		t.Fatal("triggerRestart must clear pendingRestart")
 	}
 }
+
+// forceNextRestart makes the next auto-restart attempt skip ShouldRestart;
+// the mark is consumed by the attempt.
+func TestForceNextRestart_BypassesShouldRestart(t *testing.T) {
+	var consulted bool
+	mp := &master{Config: &Config{
+		ShouldRestart: func() bool { consulted = true; return false },
+	}}
+	mp.forceNextRestart()
+	if !mp.info().ForceRequested {
+		t.Fatal("expected ForceRequested=true after forceNextRestart")
+	}
+	mp.tryRestart() //workerCmd nil so no actual restart work happens
+	if consulted {
+		t.Fatal("ShouldRestart must not be consulted when a force is latched")
+	}
+	if mp.info().ForceRequested {
+		t.Fatal("the force mark must be consumed by the restart attempt")
+	}
+	if mp.pendingRestart {
+		t.Fatal("a forced restart must not defer")
+	}
+}
+
+// a force latched while ShouldRestart is deferring must release the
+// already-pending restart on the next retry tick.
+func TestForceNextRestart_ReleasesPendingRestart(t *testing.T) {
+	mp := &master{Config: &Config{
+		ShouldRestart: func() bool { return false },
+	}}
+	mp.tryRestart()
+	if !mp.pendingRestart {
+		t.Fatal("expected pendingRestart=true while deferring")
+	}
+	mp.forceNextRestart()
+	mp.tryRestart() //the fetch loop's retry tick
+	if mp.pendingRestart {
+		t.Fatal("force must release the deferred restart")
+	}
+	if mp.info().ForceRequested {
+		t.Fatal("the force mark must be consumed")
+	}
+}
+
+func TestMasterInfo_UpgradeStaged(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	mp.binHash = []byte{1}
+	if mp.info().UpgradeStaged {
+		t.Fatal("no fork yet — nothing can be staged")
+	}
+	mp.forkedHash = mp.binHash
+	if mp.info().UpgradeStaged {
+		t.Fatal("worker forked from the current binary — not staged")
+	}
+	mp.binHash = []byte{2}
+	if !mp.info().UpgradeStaged {
+		t.Fatal("disk binary moved past the forked-from hash — staged")
+	}
+	mp.forkedHash = mp.binHash
+	if mp.info().UpgradeStaged {
+		t.Fatal("re-fork on the new binary — no longer staged")
+	}
+}
+
+func TestMasterInfo_Fields(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	mp.workerID = 3
+	mp.pendingRestart = true
+	info := mp.info()
+	if !info.IsMaster {
+		t.Fatal("expected IsMaster=true")
+	}
+	if info.WorkerForks != 3 {
+		t.Fatalf("expected WorkerForks=3, got %d", info.WorkerForks)
+	}
+	if !info.RestartPending {
+		t.Fatal("expected RestartPending=true")
+	}
+}
+
+func TestPackageFuncs_NoProcess(t *testing.T) {
+	old := currentProcess
+	currentProcess = nil
+	defer func() { currentProcess = old }()
+	ForceNextRestart() //must not panic
+	if MasterInfo() != (Info{}) {
+		t.Fatal("MasterInfo without a process must be the zero Info")
+	}
+}
+
+func TestWorker_InfoAndForceAreNoops(t *testing.T) {
+	sp := &worker{Config: &Config{}}
+	sp.forceNextRestart() //must not panic
+	if sp.info() != (Info{}) {
+		t.Fatal("worker info must be the zero Info")
+	}
+}
+
+// Exercises the new force/info paths from many goroutines so
+// `go test -race` catches any regression in their locking.
+func TestForceInfo_ConcurrentRaceFree(t *testing.T) {
+	mp := &master{Config: &Config{
+		ShouldRestart: func() bool { return false },
+	}}
+	mp.binHash = []byte{1}
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(3)
+		go func() { defer wg.Done(); mp.forceNextRestart() }()
+		go func() { defer wg.Done(); _ = mp.info() }()
+		go func() { defer wg.Done(); mp.tryRestart() }()
+	}
+	wg.Wait()
+}

@@ -146,6 +146,15 @@ func (sp *worker) triggerRestart() {
 	}
 }
 
+func (sp *worker) forceNextRestart() {
+	//restart policy lives in the master; no-op here
+}
+
+func (sp *worker) info() Info {
+	//master state is not visible from the worker
+	return Info{}
+}
+
 func (sp *worker) debugf(f string, args ...interface{}) {
 	if sp.Config.Debug {
 		log.Printf("[overseer worker#"+sp.id+"] "+f, args...)
