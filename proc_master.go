@@ -346,7 +346,7 @@ func (mp *master) fetch() {
 			}
 		}
 	}()
-	tokenOut, err := cmd.CombinedOutput()
+	tokenOut, err := cmd.Output()
 	returned = true
 	if err != nil {
 		mp.warnf("failed to run temp binary: %s (%s) output \"%s\"", err, tmpBinPath, tokenOut)
