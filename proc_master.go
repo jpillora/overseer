@@ -79,6 +79,10 @@ func (mp *master) checkBinary() error {
 	if err != nil {
 		return fmt.Errorf("failed to find binary path (%s)", err)
 	}
+	binPath, err = filepath.EvalSymlinks(binPath)
+	if err != nil {
+		return fmt.Errorf("failed to eval symlink (%s)", err)
+	}
 	mp.binPath = binPath
 	if info, err := os.Stat(binPath); err != nil {
 		return fmt.Errorf("failed to stat binary (%s)", err)
