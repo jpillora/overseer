@@ -71,6 +71,15 @@ type Config struct {
 	//subsequent fetch loop iteration until it returns true. Manual restarts
 	//via overseer.Restart() bypass this check.
 	ShouldRestart func() bool
+	// AuthorizeUpgrade is a mandatory check before replacing the executable and
+	// before activating a staged upgrade, including forced/manual restarts.
+	// It receives the candidate executable path and runs outside restart locks.
+	// Returning an error defers the upgrade; nil preserves historical behavior.
+	AuthorizeUpgrade func(binaryPath string) error
+	// UpgradeLock optionally serializes executable replacement and staged
+	// activation against external installers. The returned release must be safe
+	// to call once. A lock failure defers the operation.
+	UpgradeLock func() (release func(), err error)
 	//OnPanic, when non-nil, is invoked after the worker process exits if a
 	//Go panic/runtime crash is detected in its stderr. The snapshot is
 	//parsed by panicparse and contains the crashing goroutines. The

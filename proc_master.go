@@ -37,6 +37,7 @@ type master struct {
 	binPath, tmpBinPath string
 	binPerms            os.FileMode
 	binHash             []byte
+	upgradeMux          sync.Mutex
 	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
@@ -356,8 +357,32 @@ func (mp *master) fetch() {
 		mp.warnf("sanity check failed")
 		return
 	}
-	//overwrite!
+	// Serialize candidate replacement with activation authorization.
+	mp.upgradeMux.Lock()
+	mp.restartMux.Lock()
+	restarting = mp.restarting
+	mp.restartMux.Unlock()
+	if restarting {
+		mp.upgradeMux.Unlock()
+		return
+	}
+	release, err := mp.lockUpgrade()
+	if err != nil {
+		mp.upgradeMux.Unlock()
+		mp.warnf("upgrade lock: %s", err)
+		return
+	}
+	if mp.Config.AuthorizeUpgrade != nil {
+		if err := mp.Config.AuthorizeUpgrade(tmpBinPath); err != nil {
+			release()
+			mp.upgradeMux.Unlock()
+			mp.warnf("upgrade authorization deferred: %s", err)
+			return
+		}
+	}
 	if err := overwrite(mp.binPath, tmpBinPath); err != nil {
+		release()
+		mp.upgradeMux.Unlock()
 		mp.warnf("failed to overwrite binary: %s", err)
 		return
 	}
@@ -366,6 +391,8 @@ func (mp *master) fetch() {
 	oldHash := mp.binHash
 	mp.binHash = newHash
 	mp.restartMux.Unlock()
+	release()
+	mp.upgradeMux.Unlock()
 	mp.infof("upgraded binary (%x -> %x)", oldHash[:12], newHash[:12])
 	//binary successfully replaced
 	if !mp.Config.NoRestartAfterFetch {
@@ -413,10 +440,40 @@ func (mp *master) info() Info {
 // performs the graceful shutdown handshake. When checkShouldRestart is true
 // the caller is the fetch loop and ShouldRestart may defer the restart.
 func (mp *master) startRestart(checkShouldRestart bool) {
+	mp.upgradeMux.Lock()
+	mp.restartMux.Lock()
+	staged := mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash)
+	mp.restartMux.Unlock()
+	release := func() {}
+	if staged {
+		var err error
+		release, err = mp.lockUpgrade()
+		if err != nil {
+			mp.restartMux.Lock()
+			mp.pendingRestart = true
+			mp.restartMux.Unlock()
+			release()
+			mp.upgradeMux.Unlock()
+			return
+		}
+	}
+	if staged && mp.Config.AuthorizeUpgrade != nil {
+		if err := mp.Config.AuthorizeUpgrade(mp.binPath); err != nil {
+			mp.restartMux.Lock()
+			mp.pendingRestart = true
+			mp.restartMux.Unlock()
+			release()
+			mp.upgradeMux.Unlock()
+			mp.debugf("upgrade activation deferred: %s", err)
+			return
+		}
+	}
 	mp.restartMux.Lock()
 	if mp.restarting {
 		mp.debugf("already graceful restarting")
 		mp.restartMux.Unlock()
+		release()
+		mp.upgradeMux.Unlock()
 		return
 	}
 	if checkShouldRestart && !mp.forceNext && mp.Config.ShouldRestart != nil && !mp.Config.ShouldRestart() {
@@ -425,6 +482,8 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 		}
 		mp.pendingRestart = true
 		mp.restartMux.Unlock()
+		release()
+		mp.upgradeMux.Unlock()
 		return
 	}
 	if checkShouldRestart && mp.forceNext {
@@ -435,12 +494,16 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	if mp.workerCmd == nil {
 		mp.debugf("no worker process")
 		mp.restartMux.Unlock()
+		release()
+		mp.upgradeMux.Unlock()
 		return
 	}
 	mp.restarting = true
 	mp.awaitingUSR1 = true
 	mp.signalledAt = time.Now()
 	mp.restartMux.Unlock()
+	release()
+	mp.upgradeMux.Unlock()
 	mp.infof("graceful restart triggered")
 	mp.sendSignal(mp.Config.RestartSignal) //ask nicely to terminate
 	select {
@@ -669,4 +732,15 @@ func extension() string {
 	}
 
 	return ""
+}
+
+func (mp *master) lockUpgrade() (func(), error) {
+	if mp.Config.UpgradeLock == nil {
+		return func() {}, nil
+	}
+	release, err := mp.Config.UpgradeLock()
+	if release == nil {
+		release = func() {}
+	}
+	return release, err
 }
