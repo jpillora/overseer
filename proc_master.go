@@ -442,6 +442,11 @@ func (mp *master) info() Info {
 func (mp *master) startRestart(checkShouldRestart bool) {
 	mp.upgradeMux.Lock()
 	mp.restartMux.Lock()
+	if mp.restarting {
+		mp.restartMux.Unlock()
+		mp.upgradeMux.Unlock()
+		return
+	}
 	staged := mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash)
 	mp.restartMux.Unlock()
 	release := func() {}

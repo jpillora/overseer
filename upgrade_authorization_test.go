@@ -70,3 +70,11 @@ func TestDeniedInstallPreservesExecutable(t *testing.T) {
 		t.Fatalf("install bypassed guard: %q %v calls=%d", b, err, calls)
 	}
 }
+
+func TestRestartAlreadyRunningDoesNotRequestApproval(t *testing.T) {
+	mp := &master{Config: &Config{AuthorizeUpgrade: func(string) error { t.Fatal("duplicate activation approval"); return errors.New("denied") }}, forkedHash: []byte("old"), binHash: []byte("new"), restarting: true}
+	mp.triggerRestart()
+	if mp.pendingRestart {
+		t.Fatal("duplicate restart left a pending retry")
+	}
+}
