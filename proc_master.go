@@ -38,6 +38,7 @@ type master struct {
 	binPerms            os.FileMode
 	binHash             []byte
 	upgradeMux          sync.Mutex
+	activationRelease   func() // installer lock transferred from restart approval to cmd.Start
 	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
@@ -304,7 +305,10 @@ func (mp *master) fetch() {
 	}
 	//compare hash
 	newHash := hash.Sum(nil)
-	if bytes.Equal(mp.binHash, newHash) {
+	mp.restartMux.Lock()
+	unchanged := bytes.Equal(mp.binHash, newHash)
+	mp.restartMux.Unlock()
+	if unchanged {
 		mp.debugf("hash match - skip")
 		return
 	}
@@ -447,18 +451,30 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 		mp.upgradeMux.Unlock()
 		return
 	}
-	staged := mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash)
+	hasFork := mp.forkedHash != nil
 	mp.restartMux.Unlock()
 	release := func() {}
-	if staged {
+	staged := false
+	if hasFork {
 		var err error
 		release, err = mp.lockUpgrade()
+		if err == nil {
+			var hash []byte
+			hash, err = binaryHash(mp.binPath)
+			if err == nil {
+				mp.restartMux.Lock()
+				mp.binHash = hash
+				staged = !bytes.Equal(mp.forkedHash, hash)
+				mp.restartMux.Unlock()
+			}
+		}
 		if err != nil {
 			mp.restartMux.Lock()
 			mp.pendingRestart = true
 			mp.restartMux.Unlock()
 			release()
 			mp.upgradeMux.Unlock()
+			mp.debugf("upgrade activation deferred: %s", err)
 			return
 		}
 	}
@@ -496,7 +512,10 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	}
 	mp.pendingRestart = false
 	mp.forceNext = false
-	if mp.workerCmd == nil {
+	mp.workerMux.Lock()
+	hasWorker := mp.workerCmd != nil
+	mp.workerMux.Unlock()
+	if !hasWorker {
 		mp.debugf("no worker process")
 		mp.restartMux.Unlock()
 		release()
@@ -506,8 +525,10 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	mp.restarting = true
 	mp.awaitingUSR1 = true
 	mp.signalledAt = time.Now()
+	// Keep the approved path protected while the old worker drains. fork takes
+	// ownership and releases only after the replacement has actually started.
+	mp.activationRelease = release
 	mp.restartMux.Unlock()
-	release()
 	mp.upgradeMux.Unlock()
 	mp.infof("graceful restart triggered")
 	mp.sendSignal(mp.Config.RestartSignal) //ask nicely to terminate
@@ -533,6 +554,28 @@ func (mp *master) forkLoop() error {
 }
 
 func (mp *master) fork() error {
+	// A restart passes the installer lock from its pre-shutdown approval.
+	// Initial master startup instead trusts the explicitly started executable.
+	mp.upgradeMux.Lock()
+	mp.restartMux.Lock()
+	release := mp.activationRelease
+	mp.activationRelease = nil
+	mp.restartMux.Unlock()
+	if release == nil {
+		var err error
+		release, err = mp.lockUpgrade()
+		if err != nil {
+			release()
+			mp.upgradeMux.Unlock()
+			return fmt.Errorf("worker executable lock: %w", err)
+		}
+	}
+	unlock := func() { release(); mp.upgradeMux.Unlock() }
+	hash, err := binaryHash(mp.binPath)
+	if err != nil {
+		unlock()
+		return fmt.Errorf("worker executable hash: %w", err)
+	}
 	mp.infof("starting %s", mp.binPath)
 	cmd := exec.Command(mp.binPath)
 	//mark this new process as the "active" worker process.
@@ -549,8 +592,8 @@ func (mp *master) fork() error {
 	mp.restartMux.Lock()
 	mp.workerID++
 	workerID := mp.workerID
-	mp.forkedHash = mp.binHash
-	binID := hex.EncodeToString(mp.binHash)
+	mp.binHash = hash
+	binID := hex.EncodeToString(hash)
 	mp.restartMux.Unlock()
 	//provide the worker process with some state. Set both the new
 	//OVERSEER_WORKER_* and legacy OVERSEER_SLAVE_* names so a pre-rename
@@ -594,8 +637,13 @@ func (mp *master) fork() error {
 		mp.workerCmd = nil
 		mp.pendingSignals = nil
 		mp.workerMux.Unlock()
+		unlock()
 		return fmt.Errorf("Failed to start worker process: %s", err)
 	}
+	mp.restartMux.Lock()
+	mp.forkedHash = hash
+	mp.restartMux.Unlock()
+	unlock()
 	//drain any signals that arrived during the fork window
 	mp.workerMux.Lock()
 	pending := mp.pendingSignals
@@ -748,4 +796,18 @@ func (mp *master) lockUpgrade() (func(), error) {
 		release = func() {}
 	}
 	return release, err
+}
+
+// binaryHash reads the executable while its cooperating installer lock is held.
+func binaryHash(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := sha1.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
 }

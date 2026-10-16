@@ -76,9 +76,11 @@ type Config struct {
 	// It receives the candidate executable path and runs outside restart locks.
 	// Returning an error defers the upgrade; nil preserves historical behavior.
 	AuthorizeUpgrade func(binaryPath string) error
-	// UpgradeLock optionally serializes executable replacement and staged
-	// activation against external installers. The returned release must be safe
-	// to call once. A lock failure defers the operation.
+	// UpgradeLock optionally serializes executable replacement and worker
+	// activation against external installers. A restart holds it from executable
+	// inspection and authorization through graceful shutdown until cmd.Start
+	// returns. The release is called once, possibly from another goroutine.
+	// A lock failure defers the operation.
 	UpgradeLock func() (release func(), err error)
 	//OnPanic, when non-nil, is invoked after the worker process exits if a
 	//Go panic/runtime crash is detected in its stderr. The snapshot is
