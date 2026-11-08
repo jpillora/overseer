@@ -16,8 +16,9 @@ type File struct {
 	Path     string
 	Interval time.Duration
 	// hash is the file modify time and its size
-	hash  string
-	delay bool
+	hash         string
+	previousHash string
+	delay        bool
 }
 
 // Init sets the Path and Interval options
@@ -41,6 +42,7 @@ func (f *File) Fetch() (io.Reader, error) {
 		time.Sleep(f.Interval)
 	}
 	f.delay = true
+	f.previousHash = f.hash
 	lastHash := f.hash
 	if err := f.updateHash(); err != nil {
 		return nil, err
@@ -98,3 +100,11 @@ func (f *File) updateHash() error {
 	f.hash = fmt.Sprintf("%d|%d", s.ModTime().UnixNano(), s.Size())
 	return nil
 }
+
+func (f *File) FetchResult(err error) {
+	if err != nil {
+		f.hash = f.previousHash
+	}
+}
+
+func (f *File) Reset() { f.hash = "" }

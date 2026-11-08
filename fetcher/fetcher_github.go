@@ -1,7 +1,6 @@
 package fetcher
 
 import (
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,10 +24,13 @@ type Github struct {
 	//By default a file will match if it contains
 	//both GOOS and GOARCH.
 	Asset func(filename string) bool
+	// Timeout bounds each request including the response body. Defaults to five minutes.
+	Timeout time.Duration
 	//internal state
 	releaseURL    string
 	delay         bool
 	lastETag      string
+	previousETag  string
 	latestRelease struct {
 		TagName string `json:"tag_name"`
 		Assets  []struct {
@@ -44,6 +46,9 @@ func (h *Github) defaultAsset(filename string) bool {
 
 // Init validates the provided config
 func (h *Github) Init() error {
+	if h.Timeout <= 0 {
+		h.Timeout = 5 * time.Minute
+	}
 	//apply defaults
 	if h.User == "" {
 		return fmt.Errorf("User required")
@@ -70,8 +75,11 @@ func (h *Github) Fetch() (io.Reader, error) {
 		time.Sleep(h.Interval)
 	}
 	h.delay = true
+	h.previousETag = h.lastETag
+	client := &http.Client{Timeout: h.Timeout}
+	noRedirect := &http.Client{Timeout: h.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	//check release status
-	resp, err := http.Get(h.releaseURL)
+	resp, err := client.Get(h.releaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("release info request failed (%s)", err)
 	}
@@ -82,6 +90,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 	//clear assets
 	h.latestRelease.Assets = nil
 	if err := json.NewDecoder(resp.Body).Decode(&h.latestRelease); err != nil {
+		resp.Body.Close()
 		return nil, fmt.Errorf("invalid request info (%s)", err)
 	}
 	resp.Body.Close()
@@ -97,8 +106,11 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("no matching assets in this release (%s)", h.latestRelease.TagName)
 	}
 	//fetch location
-	req, _ := http.NewRequest("HEAD", assetURL, nil)
-	resp, err = http.DefaultTransport.RoundTrip(req)
+	req, err := http.NewRequest("HEAD", assetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err = noRedirect.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("release location request failed (%s)", err)
 	}
@@ -113,7 +125,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("release location url error (%s)", err)
 	}
 	req.Header.Set("Range", "bytes=0-0") // HEAD not allowed so we request for 1 byte
-	resp, err = http.DefaultTransport.RoundTrip(req)
+	resp, err = noRedirect.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("release location request failed (%s)", err)
 	}
@@ -126,7 +138,7 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, nil //skip, hash match
 	}
 	//get binary request
-	resp, err = http.Get(s3URL)
+	resp, err = client.Get(s3URL)
 	if err != nil {
 		return nil, fmt.Errorf("release binary request failed (%s)", err)
 	}
@@ -135,10 +147,13 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("release binary request failed (status code %d)", resp.StatusCode)
 	}
 	h.lastETag = etag
-	//success!
-	//extract gz files
-	if strings.HasSuffix(assetURL, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
-		return gzip.NewReader(resp.Body)
-	}
-	return resp.Body, nil
+	return responseReader(resp, strings.HasSuffix(assetURL, ".gz"))
 }
+
+func (h *Github) FetchResult(err error) {
+	if err != nil {
+		h.lastETag = h.previousETag
+	}
+}
+
+func (h *Github) Reset() { h.lastETag = "" }

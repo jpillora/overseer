@@ -12,7 +12,7 @@ Commonly, graceful restarts are performed by the active process (*dark blue*) cl
 
 * Simple
 * Works with process managers (systemd, upstart, supervisor, etc)
-* Graceful, zero-down time restarts
+* Graceful restarts (zero downtime with inherited listeners on Unix; a brief listener gap on Windows)
 * Easy self-upgrading binaries
 
 ### Install
@@ -74,6 +74,30 @@ func prog(state overseer.State) {
 * Except for scheduled restarts, the active child process exiting will cause the main process to exit with the same code. So, **`overseer` is not a process manager**.
 
 See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration options [here](https://godoc.org/github.com/jpillora/overseer#Config) and the runtime [State](https://godoc.org/github.com/jpillora/overseer#State) available to your program [here](https://godoc.org/github.com/jpillora/overseer#State).
+
+### Readiness and upgrade outcomes
+
+The first worker starts independently of update polling. To acknowledge that an
+upgrade has initialized successfully and recover if it fails, enable readiness:
+
+```go
+cfg.ReadyTimeout = 30 * time.Second
+cfg.OnUpgrade = func(event overseer.UpgradeEvent) {
+    log.Printf("upgrade %d %s: %s (%v)", event.Sequence, event.ID, event.Status, event.Err)
+}
+```
+
+Call `state.Ready()` from `Program` after its listeners and resources are ready.
+Every candidate must support this call. A failed start, early exit, or readiness
+timeout restores the last acknowledged executable and starts it again. Without
+`ReadyTimeout`, activation continues to mean only that the process started.
+Downloading or staging does not acknowledge a working upgrade. Use activation
+events and `MasterInfo().ActiveID` to track successful installation; concurrent
+callbacks carry ordered sequence numbers.
+
+See [Windows upgrades](WINDOWS.md) for the lifecycle contract, fetcher retry and
+timeout behavior, compatibility, user experience, recovery limits, and standalone
+verification. These lifecycle APIs work on Unix as well as Windows.
 
 ### More examples
 

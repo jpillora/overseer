@@ -18,6 +18,19 @@ type Interface interface {
 	Fetch() (io.Reader, error)
 }
 
+// Result is an optional acknowledgement implemented by caching fetchers.
+// Overseer calls it on the fetching goroutine after processing a fetch. A nil
+// error means the content was accepted on disk (possibly already present), not
+// that a worker became healthy. An error must allow the same offer to be retried.
+type Result interface {
+	FetchResult(error)
+}
+
+// Resetter optionally clears cached offers after activation rollback. Overseer
+// calls Reset on the fetching goroutine, never concurrently with Init or Fetch.
+// The next fetch can retry the same offer after its normal polling interval.
+type Resetter interface{ Reset() }
+
 // Func converts a fetch function into the fetcher interface
 func Func(fn func() (io.Reader, error)) Interface {
 	return &fetcher{fn}

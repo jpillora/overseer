@@ -29,6 +29,10 @@ const (
 	envBinCheckLegacy = "GO_UPGRADE_BIN_CHECK"
 )
 
+// ErrStopped is returned by RunErr when termination interrupts worker startup
+// or recovery. Run treats it as clean shutdown and never invokes fallback.
+var ErrStopped = errors.New("overseer stopped")
+
 // Config defines overseer's run-time configuration
 type Config struct {
 	//Required will prevent overseer from fallback to running
@@ -46,6 +50,22 @@ type Config struct {
 	//wait for the program to terminate itself. After this
 	//timeout, overseer will issue a SIGKILL.
 	TerminateTimeout time.Duration
+	// SanityCheckTimeout bounds startup of a downloaded candidate. Defaults to
+	// 30 seconds on Windows, where a new executable may need a first-run scan,
+	// and 5 seconds elsewhere.
+	SanityCheckTimeout time.Duration
+	// ReadyTimeout enables application readiness acknowledgements. When positive,
+	// Program must call State.Ready after initialization on every worker start.
+	// A fetched upgrade that fails to become ready is rolled back to the last
+	// acknowledged executable. Zero preserves the historical cmd.Start behavior.
+	ReadyTimeout time.Duration
+	// OnUpgrade reports candidate outcomes in the master. Downloading or staging
+	// does not mean activation succeeded. Without ReadyTimeout, Activated means
+	// only that the worker process started. The callback must return promptly;
+	// it may inspect MasterInfo, but must not synchronously restart the master.
+	// Events from fetching and activation may arrive concurrently.
+	// Use UpgradeEvent.Sequence to ignore late delivery of an older transition.
+	OnUpgrade func(UpgradeEvent)
 	//MinFetchInterval defines the smallest duration between Fetch()s.
 	//This helps to prevent unwieldy fetch.Interfaces from hogging
 	//too many resources. Defaults to 1 second.
@@ -120,6 +140,9 @@ func validate(c *Config) error {
 	if c.TerminateTimeout <= 0 {
 		c.TerminateTimeout = 30 * time.Second
 	}
+	if c.SanityCheckTimeout <= 0 {
+		c.SanityCheckTimeout = defaultSanityCheckTimeout
+	}
 	if c.MinFetchInterval <= 0 {
 		c.MinFetchInterval = 1 * time.Second
 	}
@@ -140,6 +163,9 @@ func RunErr(c Config) error {
 // the program directly (unless Required is set).
 func Run(c Config) {
 	err := runErr(&c)
+	if errors.Is(err, ErrStopped) {
+		os.Exit(0)
+	}
 	if err != nil {
 		if c.Required {
 			log.Fatalf("[overseer] %s", err)
@@ -197,6 +223,31 @@ type Info struct {
 	ForceRequested bool
 	//WorkerForks counts how many times the master has forked a worker.
 	WorkerForks int
+	// ActiveID identifies the last successfully started (or acknowledged, with
+	// ReadyTimeout) binary. StagedID identifies a different on-disk candidate.
+	ActiveID string
+	StagedID string
+}
+
+// UpgradeStatus identifies a step in a candidate's lifecycle.
+type UpgradeStatus string
+
+const (
+	UpgradeRejected   UpgradeStatus = "rejected"
+	UpgradeStaged     UpgradeStatus = "staged"
+	UpgradeActivated  UpgradeStatus = "activated"
+	UpgradeRolledBack UpgradeStatus = "rolled_back"
+)
+
+// UpgradeEvent identifies candidate content by SHA-1 (as State.ID does).
+// ID can be empty if downloading failed before the content could be hashed.
+// Err is non-nil for rejection or rollback. These IDs are not signatures.
+type UpgradeEvent struct {
+	// Sequence increases for each transition during this master process's life.
+	Sequence uint64
+	ID       string
+	Status   UpgradeStatus
+	Err      error
 }
 
 // abstraction over master/worker

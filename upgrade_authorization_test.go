@@ -137,7 +137,7 @@ func TestActivationProtectsExecutableThroughFork(t *testing.T) {
 	calls := 0
 	mp := &master{Config: &Config{RestartSignal: os.Interrupt, TerminateTimeout: time.Millisecond},
 		binPath: path, binHash: []byte("stale old"), forkedHash: []byte("old"), workerCmd: old,
-		restarted: make(chan bool), descriptorsReleased: make(chan bool)}
+		descriptorsReleased: make(chan bool)}
 	mp.UpgradeLock = func() (func(), error) {
 		if !installer.TryLock() {
 			return nil, errors.New("installer busy")
@@ -165,8 +165,13 @@ func TestActivationProtectsExecutableThroughFork(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if !installer.TryLock() {
-		t.Fatal("installer lock not released after cmd.Start")
+	// A child can write its marker before cmd.Start returns to the parent.
+	// Allow that scheduling window while requiring the lock to be released.
+	for !installer.TryLock() {
+		if time.Now().After(deadline) {
+			t.Fatal("installer lock not released after cmd.Start")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	installer.Unlock()
 	mp.descriptorsReleased <- true
@@ -263,5 +268,52 @@ func TestDeferredRestartReleasesInstallerLock(t *testing.T) {
 			}
 			installer.Unlock()
 		})
+	}
+}
+
+func TestRollbackRetainsInstallerLeaseUntilRecovery(t *testing.T) {
+	path, oldHash := authorizationFixture(t, "known good content")
+	backup := path + ".rollback"
+	if err := os.WriteFile(backup, []byte("known good content"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("invalid candidate image"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var installer sync.Mutex
+	releases := 0
+	mp := &master{Config: &Config{ReadyTimeout: time.Second, NoWarn: true}, binPath: path, rollbackPath: backup, rollbackHash: oldHash, forkedHash: oldHash, restarting: true, restartDone: make(chan struct{})}
+	mp.UpgradeLock = func() (func(), error) {
+		if !installer.TryLock() {
+			return nil, errors.New("busy")
+		}
+		return func() { releases++; installer.Unlock() }, nil
+	}
+	var event UpgradeEvent
+	mp.OnUpgrade = func(e UpgradeEvent) { event = e; _ = mp.info() }
+	if err := mp.fork(); err != nil {
+		t.Fatal("rollback failed", err)
+	}
+	if event.Status != UpgradeRolledBack || event.Err == nil {
+		t.Fatal("missing rollback outcome", event)
+	}
+	if installer.TryLock() {
+		installer.Unlock()
+		t.Fatal("installer could replace rollback before recovery")
+	}
+	// Explicit termination in the gap must release the inherited lease and stop.
+	mp.restartMux.Lock()
+	mp.stopping = true
+	mp.restartMux.Unlock()
+	if err := mp.fork(); err == nil {
+		t.Fatal("stopped master forked recovery")
+	}
+	if releases != 1 || !installer.TryLock() {
+		t.Fatal("stopped recovery retained lease")
+	}
+	installer.Unlock()
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "known good content" {
+		t.Fatal("rollback lost original", err)
 	}
 }
