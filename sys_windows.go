@@ -4,6 +4,7 @@
 package overseer
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,12 +42,20 @@ func overwrite(dst, src string) error {
 	if err := os.Remove(backup); err != nil {
 		return err
 	}
+	hadDestination := true
 	if err := os.Rename(dst, backup); err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		// A candidate can disappear after activation approval (for example,
+		// quarantine). The retained good image can still restore an empty path.
+		hadDestination = false
 	}
 	if err := os.Rename(src, dst); err != nil {
-		if rollback := os.Rename(backup, dst); rollback != nil {
-			return fmt.Errorf("replace failed: %v; rollback failed: %w (previous binary: %s)", err, rollback, backup)
+		if hadDestination {
+			if rollback := os.Rename(backup, dst); rollback != nil {
+				return fmt.Errorf("replace failed: %v; rollback failed: %w (previous binary: %s)", err, rollback, backup)
+			}
 		}
 		return err
 	}

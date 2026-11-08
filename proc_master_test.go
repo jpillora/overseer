@@ -292,3 +292,48 @@ func TestSkippedFetchDoesNotAcknowledgeResult(t *testing.T) {
 	default:
 	}
 }
+
+func TestShouldRestartMayInspectMasterAndRequestForce(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	previous := currentProcess
+	currentProcess = mp
+	defer func() { currentProcess = previous }()
+	mp.ShouldRestart = func() bool {
+		if !MasterInfo().IsMaster {
+			t.Error("predicate cannot inspect master")
+		}
+		ForceNextRestart()
+		return false
+	}
+	done := make(chan struct{})
+	go func() { mp.tryRestart(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("predicate deadlocked on public master APIs")
+	}
+	if mp.info().RestartPending || mp.info().ForceRequested {
+		t.Fatal("force request was not consumed", mp.info())
+	}
+}
+
+func TestTerminationDuringShouldRestartAbortsAttempt(t *testing.T) {
+	entered, resume := make(chan struct{}), make(chan struct{})
+	mp := &master{Config: &Config{RestartSignal: SIGUSR2, ShouldRestart: func() bool { close(entered); <-resume; return false }}, workerCmd: &exec.Cmd{}}
+	done := make(chan struct{})
+	go func() { mp.tryRestart(); close(done) }()
+	<-entered
+	signalled := make(chan struct{})
+	go func() { mp.handleSignal(SIGTERM); close(signalled) }()
+	select {
+	case <-signalled:
+	case <-time.After(time.Second):
+		close(resume)
+		t.Fatal("predicate blocked termination")
+	}
+	close(resume)
+	<-done
+	if !mp.stopping || mp.restarting || mp.pendingRestart {
+		t.Fatal("stopped attempt changed restart state")
+	}
+}

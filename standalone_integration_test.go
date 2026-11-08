@@ -2,6 +2,7 @@ package overseer
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -33,7 +35,11 @@ func TestStandaloneStartupRecoveryAndDescendants(t *testing.T) {
 		}
 		binaries[v] = b
 	}
-	for _, failure := range []string{"exit", "timeout", "bind"} {
+	failures := []string{"exit", "timeout", "bind"}
+	if runtime.GOOS == "windows" {
+		failures = append(failures, "missing")
+	}
+	for _, failure := range failures {
 		t.Run(failure, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "server"+extension())
@@ -159,6 +165,9 @@ func TestStandaloneStartupRecoveryAndDescendants(t *testing.T) {
 			if failure == "bind" {
 				flag("fail-bind", true)
 			}
+			if failure == "missing" {
+				flag("remove-on-shutdown", true)
+			}
 			target.Store(2)
 			waitFor("health rollback", func() bool { return strings.Contains(events(), "rolled_back") })
 			// Stop reoffering the bad candidate while checking the recovered service.
@@ -181,6 +190,53 @@ func TestStandaloneStartupRecoveryAndDescendants(t *testing.T) {
 		t.Run("stop-during-readiness-"+s.String(), func(t *testing.T) { testStopDuringReadiness(t, binaries, s) })
 	}
 	t.Run("outcome-sequences", func(t *testing.T) { testOutcomeSequences(t, binaries) })
+	t.Run("shutdown-cancels-validation", func(t *testing.T) { testShutdownCancelsValidation(t, binaries) })
+}
+
+func testShutdownCancelsValidation(t *testing.T, binaries map[int32][]byte) {
+	root := t.TempDir()
+	path := filepath.Join(root, "server"+extension())
+	if err := os.WriteFile(path, binaries[1], 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hang-sanity"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OVERSEER_POC_ROOT", root)
+	active, _ := binaryHash(path)
+	ctx, cancel := context.WithCancel(context.Background())
+	mp := &master{Config: &Config{Fetcher: upgradeReader{payload: string(binaries[2])}, SanityCheckTimeout: time.Minute, NoWarn: true}, ctx: ctx, cancel: cancel, done: make(chan struct{}), binPath: path, binHash: active, binPerms: 0755}
+	defer mp.shutdown()
+	done := make(chan struct{})
+	go func() { mp.fetch(); close(done) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if b, err := os.ReadFile(filepath.Join(root, "sanity-running")); err == nil {
+			pid, err := strconv.Atoi(string(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if proc, err := os.FindProcess(pid); err == nil {
+				defer proc.Release()
+				defer proc.Kill()
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("candidate sanity command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mp.shutdown()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not cancel sanity command")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(b, binaries[1]) {
+		t.Fatal("shutdown changed installed executable", err)
+	}
 }
 
 type blockedResultFetcher struct {

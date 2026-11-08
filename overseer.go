@@ -90,6 +90,8 @@ type Config struct {
 	//it returns false, the restart is deferred and re-checked on each
 	//subsequent fetch loop iteration until it returns true. Manual restarts
 	//via overseer.Restart() bypass this check.
+	// It may inspect MasterInfo or call ForceNextRestart. It must return promptly
+	// and must not call Restart synchronously.
 	ShouldRestart func() bool
 	// AuthorizeUpgrade is a mandatory check before replacing the executable and
 	// before activating a staged upgrade, including forced/manual restarts.

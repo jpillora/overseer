@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -324,5 +325,38 @@ func TestWindowsTerminationSignalsSetShutdownEvent(t *testing.T) {
 				t.Fatal("termination failed to signal worker", result, err)
 			}
 		})
+	}
+}
+
+func TestWindowsMissingCandidateRestoresAcknowledgedImage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.exe")
+	backup := path + ".rollback.exe"
+	good := []byte("acknowledged image")
+	if err := os.WriteFile(backup, good, 0600); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := binaryHash(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var installer sync.Mutex
+	mp := &master{Config: &Config{ReadyTimeout: time.Second, NoWarn: true}, binPath: path, rollbackPath: backup, rollbackHash: hash, forkedHash: hash, restarting: true, restartDone: make(chan struct{})}
+	mp.UpgradeLock = func() (func(), error) {
+		if !installer.TryLock() {
+			return nil, fmt.Errorf("busy")
+		}
+		return installer.Unlock, nil
+	}
+	defer mp.shutdown()
+	if err := mp.fork(); err != nil {
+		t.Fatal("recovery failed", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(content, good) {
+		t.Fatal("acknowledged image not restored", err)
+	}
+	if installer.TryLock() {
+		installer.Unlock()
+		t.Fatal("recovery released installer lock before starting worker")
 	}
 }

@@ -64,6 +64,14 @@ func main() {
 		return
 	}
 	root := os.Getenv("OVERSEER_POC_ROOT")
+	if os.Getenv("OVERSEER_BIN_CHECK") != "" {
+		if _, err := os.Stat(filepath.Join(root, "hang-sanity")); err == nil {
+			os.WriteFile(filepath.Join(root, "sanity-running"), []byte(fmt.Sprint(os.Getpid())), 0600)
+			for {
+				time.Sleep(time.Minute)
+			}
+		}
+	}
 	address := os.Getenv("OVERSEER_POC_ADDR")
 	cfg := overseer.Config{
 		Debug: true, TerminateTimeout: time.Second, WaitDelay: time.Second,
@@ -153,6 +161,12 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
 		srv.Shutdown(ctx)
+		if _, err := os.Stat(filepath.Join(root, "remove-on-shutdown")); err == nil {
+			os.Remove(filepath.Join(root, "remove-on-shutdown"))
+			if err := os.Remove(state.BinPath); err != nil {
+				panic(err)
+			}
+		}
 		os.WriteFile(filepath.Join(root, fmt.Sprintf("cleaned-%d", os.Getpid())), []byte(version), 0600)
 	}
 	if err := overseer.RunErr(cfg); err != nil {

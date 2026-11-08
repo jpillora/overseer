@@ -43,10 +43,20 @@ updates while busy. A candidate that fails to start, exits before readiness, or
 exceeds the readiness timeout is terminated and replaced with that copy. The
 same installer lock covers activation, restoration, and the recovery worker's
 readiness. Explicit termination stops the service instead of starting recovery.
+If the candidate disappears after activation approval, restoration can install
+the retained image into the now-empty executable path.
 An initial worker without a previous acknowledged image cannot be rolled back.
 Recovery failure returns an error; it does not loop indefinitely.
 `RunErr` returns `ErrStopped` when termination interrupts startup or recovery;
 `Run` exits cleanly for that outcome and never launches its disabled fallback.
+On other failures, `RunErr` detaches master-owned signal forwarding, polling,
+installer leases, and listener descriptors before returning. With `Required`
+disabled, `Run` can then invoke `Program(DisabledState)` with normal application
+signal handling. `MasterInfo` returns zero and restart/force calls become no-ops
+in that fallback. Set `Required: true` when an unsupervised fallback is unwanted.
+Shutdown cancels sanity commands and discards late fetch results before further
+validation. Already-running user callbacks/readers still need to cooperate;
+shutdown does not wait forever for a stalled legacy fetcher.
 
 With readiness disabled, existing programs retain their behavior: successful
 `cmd.Start` counts as activation. Readiness cannot detect errors after
@@ -102,6 +112,10 @@ running the master needs permission to modify the executable directory. Windows
 sharing restrictions and scanners can defer replacement without losing the
 installed image. Manual restarts bypass `ShouldRestart`; upgrade authorization
 remains mandatory. Ctrl+C and termination stop the service.
+`ShouldRestart` may inspect `MasterInfo` and call `ForceNextRestart`. User policy
+runs outside the restart state mutex; stop and force requests are checked again
+before claiming the restart. Policy callbacks must return promptly and must not
+call `Restart` synchronously.
 
 The master keeps its original configuration and code until it is explicitly
 restarted. Older Windows masters do not provide the new event handles, so moving
@@ -130,7 +144,12 @@ worker-requested restart, graceful cleanup, hung-worker termination, master-deat
 cleanup, stalled fetcher startup, independent descendant launch, readiness
 exit/timeout/bind failure, rollback followed by another upgrade, stopping during
 readiness/recovery, and installer-lock retention. Native Windows tests also
-exercise a stale kernel restart event and an actual file-sharing denial.
+exercise a stale kernel restart event, an actual file-sharing denial, and
+candidate removal during old-worker shutdown. Regressions cover predicate
+status/force calls, termination during policy evaluation, fallback listener and
+signal cleanup, late fetch rejection, and sanity-command cancellation. The
+fallback test sends real SIGTERM on Unix; Windows checks supervisor cleanup
+before terminating its subprocess.
 
 Qualification completed on Windows 11 amd64 (`go test -v ./...`) and Linux
 (`go test -race ./...`). Windows ARM64 tests cross-compile; they have not been
