@@ -189,6 +189,7 @@ func TestStandaloneStartupRecoveryAndDescendants(t *testing.T) {
 	for _, s := range []os.Signal{os.Interrupt, SIGTERM} {
 		t.Run("stop-during-readiness-"+s.String(), func(t *testing.T) { testStopDuringReadiness(t, binaries, s) })
 	}
+	t.Run("startup-updates", func(t *testing.T) { testStartupUpdates(t, binaries) })
 	t.Run("outcome-sequences", func(t *testing.T) { testOutcomeSequences(t, binaries) })
 	t.Run("shutdown-cancels-validation", func(t *testing.T) { testShutdownCancelsValidation(t, binaries) })
 }

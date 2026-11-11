@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -48,20 +49,31 @@ func (h *HTTP) Init() error {
 
 // Fetch the binary from the provided URL
 func (h *HTTP) Fetch() (io.Reader, error) {
-	//delay fetches after first
-	if h.delay {
-		time.Sleep(h.Interval)
-	}
-	h.delay = true
+	return h.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling and HTTP requests.
+func (h *HTTP) FetchContext(ctx context.Context) (io.Reader, error) {
 	h.previous = make(map[string]string, len(h.lasts))
 	for k, v := range h.lasts {
 		h.previous[k] = v
 	}
+	//delay fetches after first
+	if h.delay {
+		if err := wait(ctx, h.Interval); err != nil {
+			return nil, err
+		}
+	}
+	h.delay = true
 	client := &http.Client{Timeout: h.Timeout}
 	//status check using HEAD
-	resp, err := client.Head(h.URL)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", h.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -82,9 +94,13 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 		return nil, nil //skip, file match
 	}
 	//binary fetch using GET
-	resp, err = client.Get(h.URL)
+	req, err = http.NewRequestWithContext(ctx, "GET", h.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, err
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

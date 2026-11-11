@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,10 @@ import (
 )
 
 func (s *S3) credentials(client *http.Client, metadataURL string) (s3.Option, error) {
+	return s.credentialsContext(context.Background(), client, metadataURL)
+}
+
+func (s *S3) credentialsContext(ctx context.Context, client *http.Client, metadataURL string) (s3.Option, error) {
 	if s.Access != "" && s.Secret != "" {
 		return s3.Credentials(s.Access, s.Secret), nil
 	}
@@ -31,7 +36,11 @@ func (s *S3) credentials(client *http.Client, metadataURL string) (s3.Option, er
 		return s3.STSCredentials(access, secret, first("AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"), time.Time{}), nil
 	}
 	read := func(address string) ([]byte, error) {
-		resp, err := client.Get(address)
+		req, err := http.NewRequestWithContext(ctx, "GET", address, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
 		}

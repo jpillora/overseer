@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -73,18 +74,25 @@ func (s *S3) Init() error {
 
 // Fetch the binary from S3
 func (s *S3) Fetch() (io.Reader, error) {
+	return s.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling, credentials, and requests.
+func (s *S3) FetchContext(ctx context.Context) (io.Reader, error) {
+	s.previousETag = s.lastETag
 	//delay fetches after first
 	if s.delay {
-		time.Sleep(s.Interval)
+		if err := wait(ctx, s.Interval); err != nil {
+			return nil, err
+		}
 	}
 	s.delay = true
-	s.previousETag = s.lastETag
 	//http client where we change the timeout
 	c := http.Client{}
 	//options for this key
 	// The dependency's ambient IAM role lookup has an unbounded request.
 	// Resolve it with the same complete-request deadline as our HEAD checks.
-	creds, err := s.credentials(&http.Client{Timeout: s.HeadTimeout}, "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+	creds, err := s.credentialsContext(ctx, &http.Client{Timeout: s.HeadTimeout}, "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
 	if err != nil {
 		return nil, err
 	}
@@ -95,9 +103,9 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return nil, err
 	}
 	c.Timeout = s.HeadTimeout
-	resp, err := c.Do(req)
+	resp, err := c.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -114,9 +122,9 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return nil, err
 	}
 	c.Timeout = s.GetTimeout
-	resp, err = c.Do(req)
+	resp, err = c.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

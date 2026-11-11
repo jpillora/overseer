@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jpillora/overseer"
+	"github.com/jpillora/overseer/fetcher"
 	"github.com/jpillora/overseer/opanic"
 )
 
@@ -78,13 +79,28 @@ func main() {
 		MinFetchInterval: 100 * time.Millisecond,
 		Fetcher:          remote{root, os.Getenv("OVERSEER_POC_URL")},
 		ShouldRestart:    func() bool { _, err := os.Stat(filepath.Join(root, "busy")); return os.IsNotExist(err) },
-		AuthorizeUpgrade: func(string) error {
+		AuthorizeUpgrade: func(path string) error {
 			if _, err := os.Stat(filepath.Join(root, "deny")); err == nil {
 				return fmt.Errorf("upgrade denied")
+			}
+			if _, err := os.Stat(filepath.Join(root, "deny-activation")); err == nil {
+				if ownPath, _ := os.Executable(); path == ownPath {
+					return fmt.Errorf("activation denied")
+				}
 			}
 			return nil
 		},
 		OnPanic: func(*opanic.Snapshot) {},
+	}
+	if value := os.Getenv("OVERSEER_POC_STARTUP_TIMEOUT"); value != "" {
+		var err error
+		cfg.StartupFetchTimeout, err = time.ParseDuration(value)
+		if err != nil {
+			panic(err)
+		}
+	}
+	if os.Getenv("OVERSEER_POC_HTTP") != "" {
+		cfg.Fetcher = &fetcher.HTTP{URL: os.Getenv("OVERSEER_POC_URL"), Interval: time.Hour, Timeout: 10 * time.Second}
 	}
 	if os.Getenv("OVERSEER_POC_READY") != "" {
 		cfg.ReadyTimeout = 700 * time.Millisecond
@@ -104,6 +120,10 @@ func main() {
 		cfg.Address = address
 	}
 	cfg.Program = func(state overseer.State) {
+		if f, err := os.OpenFile(filepath.Join(root, "starts"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
+			fmt.Fprintln(f, version)
+			f.Close()
+		}
 		if b, _ := os.ReadFile(filepath.Join(root, "fail-version")); string(b) == version {
 			os.WriteFile(filepath.Join(root, "unready"), []byte(fmt.Sprint(os.Getpid())), 0600)
 			if _, err := os.Stat(filepath.Join(root, "fail-bind")); err == nil {

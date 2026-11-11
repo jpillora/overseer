@@ -54,6 +54,12 @@ type Config struct {
 	// 30 seconds on Windows, where a new executable may need a first-run scan,
 	// and 5 seconds elsewhere.
 	SanityCheckTimeout time.Duration
+	// StartupFetchTimeout gives the initial update check time to return a binary
+	// reader before starting Program. Defaults to one second; a negative value
+	// disables the startup check. Once a reader arrives, its download, validation,
+	// and installation may finish beyond this timeout before the first worker
+	// starts. A timed-out offer is canceled and discarded, never applied late.
+	StartupFetchTimeout time.Duration
 	// ReadyTimeout enables application readiness acknowledgements. When positive,
 	// Program must call State.Ready after initialization on every worker start.
 	// A fetched upgrade that fails to become ready is rolled back to the last
@@ -144,6 +150,9 @@ func validate(c *Config) error {
 	}
 	if c.SanityCheckTimeout <= 0 {
 		c.SanityCheckTimeout = defaultSanityCheckTimeout
+	}
+	if c.StartupFetchTimeout == 0 {
+		c.StartupFetchTimeout = time.Second
 	}
 	if c.MinFetchInterval <= 0 {
 		c.MinFetchInterval = 1 * time.Second

@@ -1,6 +1,10 @@
 package fetcher
 
-import "io"
+import (
+	"context"
+	"io"
+	"time"
+)
 
 // Interface defines the required fetcher functions
 type Interface interface {
@@ -16,6 +20,29 @@ type Interface interface {
 	//will be run repeatedly and forever. It is up the
 	//implementation to throttle the fetch frequency.
 	Fetch() (io.Reader, error)
+}
+
+// ContextFetcher optionally supports canceling an update check, including its
+// polling delay and returned stream. Overseer uses it instead of Fetch when
+// available. The startup timeout cancels the context only if no reader was
+// accepted; an accepted stream can finish downloading beyond that timeout.
+// Init, FetchContext, FetchResult, and Reset are serialized on one goroutine.
+type ContextFetcher interface {
+	FetchContext(context.Context) (io.Reader, error)
+}
+
+func wait(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Result is an optional acknowledgement implemented by caching fetchers.

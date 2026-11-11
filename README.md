@@ -75,10 +75,42 @@ func prog(state overseer.State) {
 
 See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration options [here](https://godoc.org/github.com/jpillora/overseer#Config) and the runtime [State](https://godoc.org/github.com/jpillora/overseer#State) available to your program [here](https://godoc.org/github.com/jpillora/overseer#State).
 
+### Startup update window
+
+By default, overseer gives the initial update check one second to return a
+binary reader **before starting the first worker**. Configure that window with:
+
+```go
+cfg.StartupFetchTimeout = time.Second // default; zero also uses one second
+// cfg.StartupFetchTimeout = -1      // skip the window and check in the background
+```
+
+No update or a fetch error starts the installed application immediately. If no
+reader arrives before the timeout (including fetcher initialization), overseer
+cancels that attempt and starts the installed application. A late reader is
+closed and discarded, so it cannot trigger an immediate restart. Normal polling
+resumes after worker startup, using the fetcher's usual interval.
+
+If a reader arrives in time, overseer finishes downloading, validating, and
+installing it before starting the first worker. Those steps may exceed the
+startup window; fetcher request timeouts and `SanityCheckTimeout` still apply.
+The original executable is retained until activation succeeds, including the
+readiness acknowledgement when enabled, so a failed startup candidate can recover.
+`AuthorizeUpgrade` and `UpgradeLock` cover both installation and activation.
+`ShouldRestart` and `NoRestartAfterFetch` govern restarts of running workers;
+the startup check selects which binary starts first.
+
+Built-in fetchers implement the optional `fetcher.ContextFetcher` interface for
+cancelable checks. Existing custom fetchers still work: a stalled `Init` or
+`Fetch` cannot extend the startup window, but it can stall subsequent checks.
+Fetches and result/reset callbacks remain serialized on one fetching goroutine.
+This window does not impose a minimum worker uptime; later updates follow the
+existing automatic restart policy.
+
 ### Readiness and upgrade outcomes
 
-The first worker starts independently of update polling. To acknowledge that an
-upgrade has initialized successfully and recover if it fails, enable readiness:
+To acknowledge that an upgrade has initialized successfully and recover if it
+fails, enable readiness:
 
 ```go
 cfg.ReadyTimeout = 30 * time.Second

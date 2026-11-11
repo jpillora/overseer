@@ -44,6 +44,8 @@ type master struct {
 	restartedAt         time.Time
 	restartDone         chan struct{}
 	fetchOnce           sync.Once
+	fetchStart          chan struct{} // releases background polling after first worker activation
+	startupCandidate    bool          // protected by restartMux; transitions also hold upgradeMux
 	rollbackPath        string
 	rollbackHash        []byte
 	eventSequence       uint64
@@ -77,7 +79,10 @@ func (mp *master) run() error {
 	if err := mp.retreiveFileDescriptors(); err != nil {
 		return err
 	}
-	err := mp.forkLoop()
+	err := mp.startupFetch()
+	if err == nil {
+		err = mp.forkLoop()
+	}
 	mp.restartMux.Lock()
 	stopping := mp.stopping
 	mp.restartMux.Unlock()
@@ -157,6 +162,9 @@ func (mp *master) handleSignal(s os.Signal) {
 		mp.stopping = true
 	}
 	mp.restartMux.Unlock()
+	if (s == os.Interrupt || s == SIGTERM) && mp.cancel != nil {
+		mp.cancel()
+	}
 	if s == mp.RestartSignal && s != os.Interrupt && s != SIGTERM {
 		//user initiated manual restart
 		go mp.triggerRestart()
@@ -217,13 +225,9 @@ func (mp *master) handleSignal(s os.Signal) {
 		mp.sendSignalTo(workerCmd, s)
 		return
 	}
-	//otherwise if not running, kill on CTRL+c
-	if s == os.Interrupt {
-		mp.debugf("interupt with no worker")
-		os.Exit(1)
-	} else {
-		mp.debugf("signal discarded (%s), no worker process", s)
-	}
+	// During the startup update window, cancellation wakes run without starting
+	// a worker. Other signals with no current worker have nowhere to be sent.
+	mp.debugf("signal received (%s), no worker process", s)
 }
 
 func (mp *master) sendSignalTo(cmd *exec.Cmd, s os.Signal) {
@@ -250,16 +254,19 @@ func (mp *master) startFetching() {
 		if mp.Fetcher == nil {
 			return
 		}
-		// Legacy Init/Fetch may block forever. Keep exactly one fetching goroutine,
-		// independent of initial startup and retries of an already staged upgrade.
-		go func() {
-			if err := mp.Fetcher.Init(); err != nil {
-				mp.warnf("fetcher init failed: %s", err)
-				return
-			}
-			mp.printCheckUpdate = true
-			mp.fetchLoop()
-		}()
+		if mp.fetchStart != nil {
+			close(mp.fetchStart)
+		} else {
+			// A disabled startup check retains independent worker startup.
+			go func() {
+				if err := mp.Fetcher.Init(); err != nil {
+					mp.warnf("fetcher init failed: %s", err)
+					return
+				}
+				mp.printCheckUpdate = true
+				mp.fetchLoop()
+			}()
+		}
 		go func() {
 			ticker := time.NewTicker(mp.MinFetchInterval)
 			defer ticker.Stop()
@@ -333,7 +340,13 @@ func (mp *master) fetch() {
 			f.Reset()
 		}
 	}
-	event, installed, err := mp.fetchCandidate()
+	reader, err := mp.fetchReader(mp.lifecycleContext())
+	mp.processFetched(reader, err, true)
+}
+
+// processFetched and fetcher acknowledgements run only on the fetching goroutine.
+func (mp *master) processFetched(reader io.Reader, fetchErr error, restart bool) {
+	event, installed, err := mp.installCandidate(reader, fetchErr)
 	if err != nil {
 		event = mp.upgradeEvent(event.ID, UpgradeRejected, err)
 	}
@@ -348,19 +361,28 @@ func (mp *master) fetch() {
 		return
 	}
 	mp.dispatchUpgrade(event)
-	if !mp.NoRestartAfterFetch {
+	if restart && !mp.NoRestartAfterFetch {
 		mp.tryRestart()
 	}
 }
 
-func (mp *master) fetchCandidate() (event UpgradeEvent, installed bool, result error) {
+func (mp *master) fetchReader(ctx context.Context) (io.Reader, error) {
+	if f, ok := mp.Fetcher.(fetcher.ContextFetcher); ok {
+		return f.FetchContext(ctx)
+	}
+	return mp.Fetcher.Fetch()
+}
+
+func (mp *master) installCandidate(reader io.Reader, fetchErr error) (event UpgradeEvent, installed bool, result error) {
 	if mp.printCheckUpdate {
 		mp.debugf("checking for updates...")
 	}
-	reader, err := mp.Fetcher.Fetch()
-	if err != nil {
-		mp.debugf("failed to get latest version: %s", err)
-		return event, false, err
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
+	if fetchErr != nil {
+		mp.debugf("failed to get latest version: %s", fetchErr)
+		return event, false, fetchErr
 	}
 	if reader == nil {
 		if mp.printCheckUpdate {
@@ -371,10 +393,6 @@ func (mp *master) fetchCandidate() (event UpgradeEvent, installed bool, result e
 	}
 	mp.printCheckUpdate = true
 	mp.debugf("streaming update...")
-	//optional closer
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
-	}
 	if mp.isStopping() {
 		return event, false, ErrStopped
 	}
@@ -506,6 +524,7 @@ func (mp *master) fetchCandidate() (event UpgradeEvent, installed bool, result e
 	mp.restartMux.Lock()
 	oldHash := mp.binHash
 	mp.binHash = newHash
+	mp.startupCandidate = len(mp.forkedHash) == 0
 	mp.restartMux.Unlock()
 	event = mp.upgradeEvent(event.ID, UpgradeStaged, nil)
 	release()
@@ -546,14 +565,15 @@ func (mp *master) info() Info {
 	if mp.disabled {
 		return Info{}
 	}
+	staged := (mp.forkedHash != nil || mp.startupCandidate) && !bytes.Equal(mp.forkedHash, mp.binHash)
 	stagedID := ""
-	if mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash) {
+	if staged {
 		stagedID = hex.EncodeToString(mp.binHash)
 	}
 	return Info{
 		ActiveID: hex.EncodeToString(mp.forkedHash), StagedID: stagedID,
 		IsMaster:       true,
-		UpgradeStaged:  mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash),
+		UpgradeStaged:  staged,
 		RestartPending: mp.pendingRestart,
 		ForceRequested: mp.forceNext,
 		WorkerForks:    mp.workerID,
@@ -704,6 +724,7 @@ func (mp *master) fork() error {
 	mp.activationRelease = nil
 	attempt := mp.restartDone
 	stopping := mp.stopping
+	startupCandidate := mp.startupCandidate
 	mp.restartMux.Unlock()
 	if stopping {
 		if release != nil {
@@ -768,6 +789,17 @@ func (mp *master) fork() error {
 	}
 	if err != nil {
 		return fail(fmt.Errorf("worker executable hash: %w", err))
+	}
+	// Initial startup normally trusts the executable explicitly launched by the
+	// user. An update installed during the startup window needs activation
+	// authorization too, under the same installer lease as cmd.Start.
+	if startupCandidate && mp.Config.AuthorizeUpgrade != nil {
+		if err := mp.Config.AuthorizeUpgrade(mp.binPath); err != nil {
+			return fail(fmt.Errorf("startup upgrade activation: %w", err))
+		}
+		if mp.isStopping() {
+			return fail(ErrStopped)
+		}
 	}
 	mp.restartMux.Lock()
 	mp.descriptorsReleased = make(chan bool, 1)
@@ -892,6 +924,7 @@ func (mp *master) fork() error {
 	mp.restartMux.Lock()
 	changed := !bytes.Equal(mp.forkedHash, hash)
 	mp.forkedHash = hash
+	mp.startupCandidate = false
 	mp.restartMux.Unlock()
 	mp.discardRollback()
 	mp.completeRestart(attempt)

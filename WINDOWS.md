@@ -10,11 +10,23 @@ launched child applications therefore start their own overseer master.
 
 ## Startup and polling
 
-The first worker starts before the fetcher is initialized. A stalled legacy
-`Init`, `Fetch`, or returned reader cannot prevent application startup. Fetching
-uses one goroutine: an uncooperative custom fetcher can stall further downloads,
-but it does not create repeated abandoned goroutines. Retries of an already
-staged restart run separately from polling.
+`Config.StartupFetchTimeout` gives the initial check one second to return a
+binary reader before the first worker starts. Zero uses that default; a negative
+value disables the startup window. The window includes `Init`. No update or an
+error starts the installed application immediately. On timeout, the check is
+canceled and late readers are closed and discarded. An accepted reader is
+downloaded, validated, and installed before starting the first worker, even when
+that takes longer than the window. It remains subject to the fetcher's own
+request timeouts and `SanityCheckTimeout`.
+
+Built-in fetchers implement `fetcher.ContextFetcher` to cancel polling delays,
+requests, and metadata lookups. Existing custom fetchers need not implement it;
+a stalled legacy `Init` or `Fetch` cannot extend the window, but it can stall
+future downloads. An accepted custom reader must provide its own read bounds.
+Fetching uses one goroutine and does not repeatedly abandon blocked custom
+calls. Background polling waits for first-worker activation and respects normal
+fetch intervals. Retries of an already staged restart run separately. The
+startup window does not impose minimum worker uptime for later updates.
 
 HTTP and Github fetchers have a configurable `Timeout`, defaulting to five
 minutes per complete request, including response-body reads. S3 uses its existing
@@ -45,7 +57,10 @@ same installer lock covers activation, restoration, and the recovery worker's
 readiness. Explicit termination stops the service instead of starting recovery.
 If the candidate disappears after activation approval, restoration can install
 the retained image into the now-empty executable path.
-An initial worker without a previous acknowledged image cannot be rolled back.
+For a startup-window upgrade, the executable originally launched is preserved
+until the candidate activates. A failed startup candidate can therefore recover
+before any worker has been acknowledged. Without a startup upgrade or a previous
+acknowledged image, an initial worker cannot be rolled back.
 Recovery failure returns an error; it does not loop indefinitely.
 `RunErr` returns `ErrStopped` when termination interrupts startup or recovery;
 `Run` exits cleanly for that outcome and never launches its disabled fallback.
@@ -116,6 +131,10 @@ remains mandatory. Ctrl+C and termination stop the service.
 runs outside the restart state mutex; stop and force requests are checked again
 before claiming the restart. Policy callbacks must return promptly and must not
 call `Restart` synchronously.
+The startup update window selects the first worker and does not consult
+`ShouldRestart` or `NoRestartAfterFetch`, which control restarts of an already
+running application. Startup candidates still require authorization at both
+installation and activation, under the installer lock.
 
 The master keeps its original configuration and code until it is explicitly
 restarted. Older Windows masters do not provide the new event handles, so moving
@@ -148,6 +167,9 @@ exercise a stale kernel restart event, an actual file-sharing denial, and
 candidate removal during old-worker shutdown. Regressions cover predicate
 status/force calls, termination during policy evaluation, fallback listener and
 signal cleanup, late fetch rejection, and sanity-command cancellation. The
+startup suite checks an accepted stream that exceeds the window, canceled HTTP
+lookups, discarded late legacy results, startup rollback, and denied startup
+activation, including with readiness disabled. The
 fallback test sends real SIGTERM on Unix; Windows checks supervisor cleanup
 before terminating its subprocess.
 

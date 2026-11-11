@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -70,18 +71,29 @@ func (h *Github) Init() error {
 
 // Fetch the binary from the provided Repository
 func (h *Github) Fetch() (io.Reader, error) {
+	return h.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling and HTTP requests.
+func (h *Github) FetchContext(ctx context.Context) (io.Reader, error) {
+	h.previousETag = h.lastETag
 	//delay fetches after first
 	if h.delay {
-		time.Sleep(h.Interval)
+		if err := wait(ctx, h.Interval); err != nil {
+			return nil, err
+		}
 	}
 	h.delay = true
-	h.previousETag = h.lastETag
 	client := &http.Client{Timeout: h.Timeout}
 	noRedirect := &http.Client{Timeout: h.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	//check release status
-	resp, err := client.Get(h.releaseURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", h.releaseURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("release info request failed (%s)", err)
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("release info request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
@@ -106,13 +118,13 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, fmt.Errorf("no matching assets in this release (%s)", h.latestRelease.TagName)
 	}
 	//fetch location
-	req, err := http.NewRequest("HEAD", assetURL, nil)
+	req, err = http.NewRequestWithContext(ctx, "HEAD", assetURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err = noRedirect.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("release location request failed (%s)", err)
+		return nil, fmt.Errorf("release location request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
@@ -120,14 +132,14 @@ func (h *Github) Fetch() (io.Reader, error) {
 	}
 	s3URL := resp.Header.Get("Location")
 	//pseudo-HEAD request
-	req, err = http.NewRequest("GET", s3URL, nil)
+	req, err = http.NewRequestWithContext(ctx, "GET", s3URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("release location url error (%s)", err)
 	}
 	req.Header.Set("Range", "bytes=0-0") // HEAD not allowed so we request for 1 byte
 	resp, err = noRedirect.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("release location request failed (%s)", err)
+		return nil, fmt.Errorf("release location request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
@@ -138,9 +150,13 @@ func (h *Github) Fetch() (io.Reader, error) {
 		return nil, nil //skip, hash match
 	}
 	//get binary request
-	resp, err = client.Get(s3URL)
+	req, err = http.NewRequestWithContext(ctx, "GET", s3URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("release binary request failed (%s)", err)
+		return nil, err
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("release binary request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
