@@ -46,7 +46,7 @@ func (sp *worker) initReady() error {
 	f := os.NewFile(uintptr(fd), "overseer-ready")
 	var once sync.Once
 	var result error
-	sp.state.ready = func() error {
+	sp.ready = func() error {
 		once.Do(func() { _, result = f.Write([]byte{1}); f.Close() })
 		return result
 	}

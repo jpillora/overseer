@@ -261,7 +261,7 @@ func (f *resultErrorFetcher) FetchResult(error) { close(f.observed); <-f.resume 
 func TestFetchOutcomePrecedesSlowResultCallback(t *testing.T) {
 	f := &resultErrorFetcher{observed: make(chan struct{}), resume: make(chan struct{})}
 	events := make(chan UpgradeEvent, 1)
-	mp := &master{Config: &Config{Fetcher: f, NoWarn: true, OnUpgrade: func(e UpgradeEvent) { events <- e }}}
+	mp := &master{Config: &Config{Fetcher: f, NoWarn: true}, Options: Options{OnUpgrade: func(e UpgradeEvent) { events <- e }}}
 	done := make(chan struct{})
 	go func() { mp.fetch(); close(done) }()
 	select {

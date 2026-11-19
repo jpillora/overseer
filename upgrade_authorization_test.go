@@ -282,7 +282,7 @@ func TestRollbackRetainsInstallerLeaseUntilRecovery(t *testing.T) {
 	}
 	var installer sync.Mutex
 	releases := 0
-	mp := &master{Config: &Config{ReadyTimeout: time.Second, NoWarn: true}, binPath: path, rollbackPath: backup, rollbackHash: oldHash, forkedHash: oldHash, restarting: true, restartDone: make(chan struct{})}
+	mp := &master{Config: &Config{NoWarn: true}, Options: Options{ReadyTimeout: time.Second}, binPath: path, rollbackPath: backup, rollbackHash: oldHash, forkedHash: oldHash, restarting: true, restartDone: make(chan struct{})}
 	mp.UpgradeLock = func() (func(), error) {
 		if !installer.TryLock() {
 			return nil, errors.New("busy")

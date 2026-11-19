@@ -56,7 +56,7 @@ func (sp *worker) initReady() error {
 	}
 	var once sync.Once
 	var result error
-	sp.state.ready = func() error {
+	sp.ready = func() error {
 		once.Do(func() { result = windows.SetEvent(h); windows.CloseHandle(h) })
 		return result
 	}

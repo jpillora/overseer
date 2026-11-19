@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -190,8 +191,57 @@ func TestStandaloneStartupRecoveryAndDescendants(t *testing.T) {
 		t.Run("stop-during-readiness-"+s.String(), func(t *testing.T) { testStopDuringReadiness(t, binaries, s) })
 	}
 	t.Run("startup-updates", func(t *testing.T) { testStartupUpdates(t, binaries) })
+	t.Run("stop-after-startup-staging", func(t *testing.T) { testInterruptedStartupStage(t, binaries) })
 	t.Run("outcome-sequences", func(t *testing.T) { testOutcomeSequences(t, binaries) })
 	t.Run("shutdown-cancels-validation", func(t *testing.T) { testShutdownCancelsValidation(t, binaries) })
+}
+
+func testInterruptedStartupStage(t *testing.T, binaries map[int32][]byte) {
+	path := filepath.Join(t.TempDir(), "server"+extension())
+	if err := os.WriteFile(path, binaries[1], 0755); err != nil {
+		t.Fatal(err)
+	}
+	active, err := binaryHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var locked atomic.Bool
+	mp := &master{
+		Config: &Config{
+			Fetcher: upgradeReader{payload: string(binaries[2])}, NoWarn: true,
+			UpgradeLock: func() (func(), error) {
+				if !locked.CompareAndSwap(false, true) {
+					return nil, errors.New("installer lease already held")
+				}
+				return func() { locked.Store(false) }, nil
+			},
+		},
+		Options: Options{StartupFetchTimeout: 2 * time.Second},
+		ctx:     ctx, cancel: cancel, binPath: path, binHash: active, binPerms: 0755,
+	}
+	t.Cleanup(func() { _ = mp.shutdown() })
+	mp.OnUpgrade = func(e UpgradeEvent) {
+		if e.Status == UpgradeStaged {
+			mp.handleSignal(SIGTERM)
+		}
+	}
+	if err := mp.startupFetch(); !errors.Is(err, ErrStopped) {
+		t.Fatalf("startup did not stop after staging: %v", err)
+	}
+	if err := mp.fork(); !errors.Is(err, ErrStopped) || !locked.Load() {
+		t.Fatalf("stopped fork lost the installer lease: %v", err)
+	}
+	if err := mp.shutdown(); err != nil {
+		t.Fatal(err)
+	}
+	if locked.Load() {
+		t.Fatal("installer lease still held after rollback")
+	}
+	installed, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(installed, binaries[1]) {
+		t.Fatalf("interrupted staging left a candidate at the launch path: %v", err)
+	}
 }
 
 func testShutdownCancelsValidation(t *testing.T, binaries map[int32][]byte) {
@@ -206,7 +256,7 @@ func testShutdownCancelsValidation(t *testing.T, binaries map[int32][]byte) {
 	t.Setenv("OVERSEER_POC_ROOT", root)
 	active, _ := binaryHash(path)
 	ctx, cancel := context.WithCancel(context.Background())
-	mp := &master{Config: &Config{Fetcher: upgradeReader{payload: string(binaries[2])}, SanityCheckTimeout: time.Minute, NoWarn: true}, ctx: ctx, cancel: cancel, done: make(chan struct{}), binPath: path, binHash: active, binPerms: 0755}
+	mp := &master{Config: &Config{Fetcher: upgradeReader{payload: string(binaries[2])}, NoWarn: true}, Options: Options{SanityCheckTimeout: time.Minute}, ctx: ctx, cancel: cancel, done: make(chan struct{}), binPath: path, binHash: active, binPerms: 0755}
 	defer mp.shutdown()
 	done := make(chan struct{})
 	go func() { mp.fetch(); close(done) }()
@@ -267,7 +317,7 @@ func testOutcomeSequences(t *testing.T, binaries map[int32][]byte) {
 	t.Setenv("OVERSEER_POC_ADDR", "127.0.0.1:0")
 	f := &blockedResultFetcher{payload: binaries[2], accepted: make(chan struct{}), resume: make(chan struct{})}
 	events := make(chan UpgradeEvent, 4)
-	mp := &master{Config: &Config{Fetcher: f, ReadyTimeout: time.Second, NoRestartAfterFetch: true, NoWarn: true, OnUpgrade: func(e UpgradeEvent) { events <- e }}, binPath: path, binPerms: 0755, binHash: active, forkedHash: active}
+	mp := &master{Config: &Config{Fetcher: f, NoRestartAfterFetch: true, NoWarn: true}, Options: Options{ReadyTimeout: time.Second, OnUpgrade: func(e UpgradeEvent) { events <- e }}, binPath: path, binPerms: 0755, binHash: active, forkedHash: active}
 	mp.fetchOnce.Do(func() {}) // This test explicitly owns the single fetch call.
 	fetched := make(chan struct{})
 	go func() { mp.fetch(); close(fetched) }()
@@ -322,7 +372,7 @@ func testStopDuringReadiness(t *testing.T, binaries map[int32][]byte, stop os.Si
 	t.Setenv("OVERSEER_POC_ROOT", root)
 	t.Setenv("OVERSEER_POC_ADDR", "127.0.0.1:0")
 	active, _ := binaryHash(backup)
-	mp := &master{Config: &Config{RestartSignal: SIGUSR2, ReadyTimeout: time.Second, TerminateTimeout: 200 * time.Millisecond, WaitDelay: time.Second, NoWarn: true}, binPath: path, binPerms: 0755, forkedHash: active, rollbackHash: active, rollbackPath: backup, restarting: true, restartDone: make(chan struct{})}
+	mp := &master{Config: &Config{RestartSignal: SIGUSR2, TerminateTimeout: 200 * time.Millisecond, WaitDelay: time.Second, NoWarn: true}, Options: Options{ReadyTimeout: time.Second}, binPath: path, binPerms: 0755, forkedHash: active, rollbackHash: active, rollbackPath: backup, restarting: true, restartDone: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() { done <- mp.fork() }()
 	deadline := time.Now().Add(5 * time.Second)

@@ -42,8 +42,12 @@ func startupTestMaster(t *testing.T, f *startupTestFetcher) *master {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	mp := &master{Config: &Config{Fetcher: f, StartupFetchTimeout: 50 * time.Millisecond, MinFetchInterval: 50 * time.Millisecond, NoWarn: true}, ctx: ctx, cancel: cancel, done: make(chan struct{}), binPath: path, binHash: hash, binPerms: 0755}
-	t.Cleanup(mp.shutdown)
+	mp := &master{Config: &Config{Fetcher: f, MinFetchInterval: 50 * time.Millisecond, NoWarn: true}, Options: Options{StartupFetchTimeout: 50 * time.Millisecond}, ctx: ctx, cancel: cancel, done: make(chan struct{}), binPath: path, binHash: hash, binPerms: 0755}
+	t.Cleanup(func() {
+		if err := mp.shutdown(); err != nil {
+			t.Error(err)
+		}
+	})
 	return mp
 }
 

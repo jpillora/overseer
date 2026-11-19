@@ -10,7 +10,7 @@ import (
 
 // Called with upgradeMux and the cooperating installer lock held. Keep the
 // acknowledged image across multiple staged candidates while a worker is busy.
-func (mp *master) saveRollback() error {
+func (mp *master) saveRollback(startup bool) error {
 	if mp.rollbackPath != "" {
 		return nil
 	}
@@ -18,11 +18,11 @@ func (mp *master) saveRollback() error {
 	active := append([]byte(nil), mp.forkedHash...)
 	disk := append([]byte(nil), mp.binHash...)
 	mp.restartMux.Unlock()
-	if len(active) == 0 {
+	if startup {
 		// A startup update has no acknowledged worker yet. Preserve the image
 		// the user launched so a failed first candidate can still be recovered.
 		active = disk
-	} else if mp.ReadyTimeout <= 0 {
+	} else if mp.ReadyTimeout <= 0 || len(active) == 0 {
 		return nil
 	}
 	if !bytes.Equal(active, disk) {

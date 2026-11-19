@@ -72,7 +72,7 @@ func TestRunFallbackHelper(t *testing.T) {
 	}
 	root, address := os.Getenv("OVERSEER_TEST_FALLBACK_ROOT"), os.Getenv("OVERSEER_TEST_FALLBACK_ADDR")
 	fail := func(err any) { fmt.Fprintln(os.Stderr, err); os.Exit(7) }
-	Run(Config{Address: address, ReadyTimeout: 500 * time.Millisecond, TerminateTimeout: 100 * time.Millisecond, NoWarn: true, Program: func(s State) {
+	RunWithOptions(Config{Address: address, TerminateTimeout: 100 * time.Millisecond, NoWarn: true, Program: func(s State) {
 		if s.Enabled {
 			os.WriteFile(filepath.Join(root, "unready"), nil, 0600)
 			select {}
@@ -108,6 +108,6 @@ func TestRunFallbackHelper(t *testing.T) {
 		for {
 			time.Sleep(time.Minute)
 		}
-	}})
+	}}, Options{ReadyTimeout: 500 * time.Millisecond})
 	os.Exit(9)
 }

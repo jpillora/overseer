@@ -48,7 +48,7 @@ func (mp *master) startupFetch() error {
 			case offer <- reader != nil && err == nil:
 				select {
 				case <-accepted:
-					mp.processFetched(reader, err, false)
+					mp.processFetched(reader, err, true)
 				case <-ctx.Done():
 					mp.discardStartupFetch(reader, ctx.Err())
 				}

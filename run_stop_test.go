@@ -57,7 +57,7 @@ func TestRunStopHelper(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}()
-	Run(Config{ReadyTimeout: time.Second, TerminateTimeout: 100 * time.Millisecond, NoWarn: true,
+	RunWithOptions(Config{TerminateTimeout: 100 * time.Millisecond, NoWarn: true,
 		UpgradeLock: func() (func(), error) { published <- currentProcess.(*master); return func() {}, nil },
 		Program: func(s State) {
 			if !s.Enabled {
@@ -67,6 +67,6 @@ func TestRunStopHelper(t *testing.T) {
 			os.WriteFile(filepath.Join(root, "unready"), nil, 0600)
 			select {}
 		},
-	})
+	}, Options{ReadyTimeout: time.Second})
 	os.Exit(9)
 }

@@ -94,6 +94,9 @@ func (f *File) FetchContext(ctx context.Context) (io.Reader, error) {
 		}
 		lastHash = f.hash
 	}
+	if ctx.Done() == nil {
+		return file, nil
+	}
 	return &contextFile{File: file, stop: context.AfterFunc(ctx, func() { file.Close() })}, nil
 }
 

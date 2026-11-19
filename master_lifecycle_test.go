@@ -34,7 +34,7 @@ func TestShutdownDiscardsLateFetchBeforeValidation(t *testing.T) {
 	}
 	r := &closingReader{Reader: bytes.NewReader([]byte("candidate"))}
 	f := &lateFetcher{entered: make(chan struct{}), resume: make(chan struct{}), reader: r, result: make(chan error, 1)}
-	mp := &master{Config: &Config{Fetcher: f, PreUpgrade: func(string) error { t.Error("late fetch ran validation"); return nil }, OnUpgrade: func(UpgradeEvent) { t.Error("disabled supervisor reported an event") }}, binPath: path, binPerms: 0755}
+	mp := &master{Config: &Config{Fetcher: f, PreUpgrade: func(string) error { t.Error("late fetch ran validation"); return nil }}, Options: Options{OnUpgrade: func(UpgradeEvent) { t.Error("disabled supervisor reported an event") }}, binPath: path, binPerms: 0755}
 	done := make(chan struct{})
 	go func() { mp.fetch(); close(done) }()
 	<-f.entered

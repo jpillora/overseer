@@ -81,8 +81,9 @@ By default, overseer gives the initial update check one second to return a
 binary reader **before starting the first worker**. Configure that window with:
 
 ```go
-cfg.StartupFetchTimeout = time.Second // default; zero also uses one second
-// cfg.StartupFetchTimeout = -1      // skip the window and check in the background
+options := overseer.Options{StartupFetchTimeout: time.Second} // zero also uses one second
+// options.StartupFetchTimeout = -1 // check in the background after worker startup
+overseer.RunWithOptions(cfg, options)
 ```
 
 No update or a fetch error starts the installed application immediately. If no
@@ -96,7 +97,8 @@ installing it before starting the first worker. Those steps may exceed the
 startup window; fetcher request timeouts and `SanityCheckTimeout` still apply.
 The original executable is retained until activation succeeds, including the
 readiness acknowledgement when enabled, so a failed startup candidate can recover.
-`AuthorizeUpgrade` and `UpgradeLock` cover both installation and activation.
+One installer lease covers installation, activation, and any rollback. If the
+master stops before activation, it restores the original before releasing the lease.
 `ShouldRestart` and `NoRestartAfterFetch` govern restarts of running workers;
 the startup check selects which binary starts first.
 
@@ -113,10 +115,11 @@ To acknowledge that an upgrade has initialized successfully and recover if it
 fails, enable readiness:
 
 ```go
-cfg.ReadyTimeout = 30 * time.Second
-cfg.OnUpgrade = func(event overseer.UpgradeEvent) {
+options := overseer.Options{ReadyTimeout: 30 * time.Second}
+options.OnUpgrade = func(event overseer.UpgradeEvent) {
     log.Printf("upgrade %d %s: %s (%v)", event.Sequence, event.ID, event.Status, event.Err)
 }
+overseer.RunWithOptions(cfg, options)
 ```
 
 Call `state.Ready()` from `Program` after its listeners and resources are ready.
@@ -124,8 +127,14 @@ Every candidate must support this call. A failed start, early exit, or readiness
 timeout restores the last acknowledged executable and starts it again. Without
 `ReadyTimeout`, activation continues to mean only that the process started.
 Downloading or staging does not acknowledge a working upgrade. Use activation
-events and `MasterInfo().ActiveID` to track successful installation; concurrent
+events and `MasterUpgradeInfo().ActiveID` to track successful installation; concurrent
 callbacks carry ordered sequence numbers.
+
+On Linux and macOS, an existing master can run a new worker using the same
+listener descriptors and restart signals. The running master retains its old
+code and configuration until a normal process restart. Workers retain the
+historical `OVERSEER_IS_WORKER`, `OVERSEER_IS_SLAVE`, ID, and path variables;
+`State.Enabled` is available to callers that receive a `State`.
 
 See [Windows upgrades](WINDOWS.md) for the lifecycle contract, fetcher retry and
 timeout behavior, compatibility, user experience, recovery limits, and standalone

@@ -1,12 +1,15 @@
 package overseer
 
-import "os/signal"
+import (
+	"fmt"
+	"os/signal"
+)
 
 // shutdown detaches the supervisor before Run can enter its disabled fallback,
 // or RunErr returns control to an application that keeps running. A legacy
 // fetcher may still be inside Init/Fetch; stopping prevents it from installing
 // anything when it returns, without waiting forever for user code to cooperate.
-func (mp *master) shutdown() {
+func (mp *master) shutdown() error {
 	mp.shutdownOnce.Do(func() {
 		mp.restartMux.Lock()
 		mp.stopping = true
@@ -30,7 +33,13 @@ func (mp *master) shutdown() {
 		mp.restartMux.Lock()
 		release := mp.activationRelease
 		mp.activationRelease = nil
+		startupCandidate := mp.startupCandidate
 		mp.restartMux.Unlock()
+		if startupCandidate && release != nil {
+			if err := mp.restoreRollback(); err != nil {
+				mp.shutdownErr = fmt.Errorf("restore startup executable from %s: %w", mp.rollbackPath, err)
+			}
+		}
 		if release != nil {
 			release()
 		}
@@ -46,6 +55,7 @@ func (mp *master) shutdown() {
 		mp.workerExtraFiles = nil
 		mp.upgradeMux.Unlock()
 	})
+	return mp.shutdownErr
 }
 
 func (mp *master) isStopping() bool {

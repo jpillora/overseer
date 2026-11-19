@@ -50,28 +50,6 @@ type Config struct {
 	//wait for the program to terminate itself. After this
 	//timeout, overseer will issue a SIGKILL.
 	TerminateTimeout time.Duration
-	// SanityCheckTimeout bounds startup of a downloaded candidate. Defaults to
-	// 30 seconds on Windows, where a new executable may need a first-run scan,
-	// and 5 seconds elsewhere.
-	SanityCheckTimeout time.Duration
-	// StartupFetchTimeout gives the initial update check time to return a binary
-	// reader before starting Program. Defaults to one second; a negative value
-	// disables the startup check. Once a reader arrives, its download, validation,
-	// and installation may finish beyond this timeout before the first worker
-	// starts. A timed-out offer is canceled and discarded, never applied late.
-	StartupFetchTimeout time.Duration
-	// ReadyTimeout enables application readiness acknowledgements. When positive,
-	// Program must call State.Ready after initialization on every worker start.
-	// A fetched upgrade that fails to become ready is rolled back to the last
-	// acknowledged executable. Zero preserves the historical cmd.Start behavior.
-	ReadyTimeout time.Duration
-	// OnUpgrade reports candidate outcomes in the master. Downloading or staging
-	// does not mean activation succeeded. Without ReadyTimeout, Activated means
-	// only that the worker process started. The callback must return promptly;
-	// it may inspect MasterInfo, but must not synchronously restart the master.
-	// Events from fetching and activation may arrive concurrently.
-	// Use UpgradeEvent.Sequence to ignore late delivery of an older transition.
-	OnUpgrade func(UpgradeEvent)
 	//MinFetchInterval defines the smallest duration between Fetch()s.
 	//This helps to prevent unwieldy fetch.Interfaces from hogging
 	//too many resources. Defaults to 1 second.
@@ -129,6 +107,31 @@ type Config struct {
 	WaitDelay time.Duration
 }
 
+// Options configures bounded startup fetching, readiness, and upgrade events.
+// Its zero value is used by Run and RunErr.
+type Options struct {
+	// SanityCheckTimeout bounds startup of a downloaded candidate. Defaults to
+	// 30 seconds on Windows, where a new executable may need a first-run scan,
+	// and 5 seconds elsewhere.
+	SanityCheckTimeout time.Duration
+	// StartupFetchTimeout gives the initial update check time to return a binary
+	// reader before starting Program. Defaults to one second; a negative value
+	// disables the startup check. Once a reader arrives, its download, validation,
+	// and installation may finish beyond this timeout before the first worker
+	// starts. A timed-out offer is canceled and discarded, never applied late.
+	StartupFetchTimeout time.Duration
+	// ReadyTimeout enables application readiness acknowledgements. When positive,
+	// Program must call State.Ready after initialization on every worker start.
+	// A fetched upgrade that fails to become ready is rolled back to the last
+	// acknowledged executable. Zero preserves the historical cmd.Start behavior.
+	ReadyTimeout time.Duration
+	// OnUpgrade reports candidate outcomes in the master. Without ReadyTimeout,
+	// Activated means the worker process started. The callback must return
+	// promptly; it may inspect MasterInfo but must not call Restart synchronously.
+	// Events may arrive concurrently; Sequence orders transitions.
+	OnUpgrade func(UpgradeEvent)
+}
+
 func validate(c *Config) error {
 	//validate
 	if c.Program == nil {
@@ -148,12 +151,6 @@ func validate(c *Config) error {
 	if c.TerminateTimeout <= 0 {
 		c.TerminateTimeout = 30 * time.Second
 	}
-	if c.SanityCheckTimeout <= 0 {
-		c.SanityCheckTimeout = defaultSanityCheckTimeout
-	}
-	if c.StartupFetchTimeout == 0 {
-		c.StartupFetchTimeout = time.Second
-	}
 	if c.MinFetchInterval <= 0 {
 		c.MinFetchInterval = 1 * time.Second
 	}
@@ -166,14 +163,22 @@ func validate(c *Config) error {
 // RunErr allows manual handling of any
 // overseer errors.
 func RunErr(c Config) error {
-	return runErr(&c)
+	return RunErrWithOptions(c, Options{})
 }
+
+// RunErrWithOptions is RunErr with optional upgrade lifecycle settings.
+func RunErrWithOptions(c Config, options Options) error { return runErr(&c, options) }
 
 // Run executes overseer, if an error is
 // encountered, overseer fallsback to running
 // the program directly (unless Required is set).
 func Run(c Config) {
-	err := runErr(&c)
+	RunWithOptions(c, Options{})
+}
+
+// RunWithOptions is Run with optional upgrade lifecycle settings.
+func RunWithOptions(c Config, options Options) {
+	err := runErr(&c, options)
 	if errors.Is(err, ErrStopped) {
 		os.Exit(0)
 	}
@@ -234,9 +239,13 @@ type Info struct {
 	ForceRequested bool
 	//WorkerForks counts how many times the master has forked a worker.
 	WorkerForks int
-	// ActiveID identifies the last successfully started (or acknowledged, with
-	// ReadyTimeout) binary. StagedID identifies a different on-disk candidate.
+}
+
+// UpgradeInfo is a snapshot of the active and staged binary content IDs.
+type UpgradeInfo struct {
+	// ActiveID identifies the last successfully started or readiness-acknowledged binary.
 	ActiveID string
+	// StagedID identifies a different candidate on disk, if present.
 	StagedID string
 }
 
@@ -269,7 +278,7 @@ var currentProcess interface {
 	run() error
 }
 
-func runErr(c *Config) error {
+func runErr(c *Config, options Options) error {
 	//os not supported
 	if !supported {
 		return fmt.Errorf("os (%s) not supported", runtime.GOOS)
@@ -280,13 +289,17 @@ func runErr(c *Config) error {
 	if sanityCheck() {
 		return nil
 	}
+	if os.Getenv(envWorkerBootstrapped) == "1" {
+		// An independently started descendant inherited a worker's metadata.
+		clearBootstrapEnvironment()
+	}
 	//run either in master or worker mode. Accept either the new
 	//OVERSEER_IS_WORKER or legacy OVERSEER_IS_SLAVE so a new binary can be
 	//forked by an old master (and vice versa) during upgrades.
 	if os.Getenv(envIsWorker) == "1" || os.Getenv(envIsSlave) == "1" {
 		currentProcess = &worker{Config: c}
 	} else {
-		currentProcess = &master{Config: c}
+		currentProcess = &master{Config: c, Options: options}
 	}
 	return currentProcess.run()
 }
@@ -319,6 +332,16 @@ func MasterInfo() Info {
 		return currentProcess.info()
 	}
 	return Info{}
+}
+
+// MasterUpgradeInfo returns the master's active and staged binary IDs. Before
+// Run and in a worker it returns the zero value.
+func MasterUpgradeInfo() UpgradeInfo {
+	if mp, ok := currentProcess.(*master); ok {
+		_, upgrade := mp.infoSnapshot()
+		return upgrade
+	}
+	return UpgradeInfo{}
 }
 
 // IsSupported returns whether overseer is supported on the current OS.

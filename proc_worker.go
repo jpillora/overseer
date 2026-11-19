@@ -39,15 +39,16 @@ type State struct {
 	GracefulShutdown chan bool
 	//Path of the binary currently being executed
 	BinPath string
-	ready   func() error
 }
 
 // Ready acknowledges successful application initialization. It is safe to call
 // repeatedly. With ReadyTimeout disabled (or overseer disabled) it is a no-op.
 // Call only after the application can serve requests and its resources are ready.
 func (s State) Ready() error {
-	if s.ready != nil {
-		return s.ready()
+	if s.Enabled && s.GracefulShutdown != nil {
+		if sp, ok := currentProcess.(*worker); ok && sp.state.GracefulShutdown == s.GracefulShutdown && sp.ready != nil {
+			return sp.ready()
+		}
 	}
 	return nil
 }
@@ -62,10 +63,15 @@ type worker struct {
 	masterProc *os.Process
 	control    *workerControl
 	state      State
+	ready      func() error
 }
 
-func (sp *worker) run() error {
-	defer clearBootstrapEnvironment()
+func (sp *worker) run() (err error) {
+	defer func() {
+		if err != nil {
+			clearBootstrapEnvironment()
+		}
+	}()
 	// Prefer the new env var; fall back to the legacy OVERSEER_SLAVE_ID so a
 	// worker forked by a pre-rename master still gets its id.
 	if id := os.Getenv(envWorkerID); id != "" {
@@ -91,7 +97,10 @@ func (sp *worker) run() error {
 		return err
 	}
 	sp.watchSignal()
-	clearBootstrapEnvironment()
+	clearWorkerTransport()
+	if err := os.Setenv(envWorkerBootstrapped, "1"); err != nil {
+		return err
+	}
 	//run program with state
 	sp.debugf("start program")
 	sp.Config.Program(sp.state)

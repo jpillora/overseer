@@ -340,7 +340,7 @@ func TestWindowsMissingCandidateRestoresAcknowledgedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var installer sync.Mutex
-	mp := &master{Config: &Config{ReadyTimeout: time.Second, NoWarn: true}, binPath: path, rollbackPath: backup, rollbackHash: hash, forkedHash: hash, restarting: true, restartDone: make(chan struct{})}
+	mp := &master{Config: &Config{NoWarn: true}, Options: Options{ReadyTimeout: time.Second}, binPath: path, rollbackPath: backup, rollbackHash: hash, forkedHash: hash, restarting: true, restartDone: make(chan struct{})}
 	mp.UpgradeLock = func() (func(), error) {
 		if !installer.TryLock() {
 			return nil, fmt.Errorf("busy")

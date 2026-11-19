@@ -4,13 +4,14 @@ Windows uses inherited, unnamed kernel events for master-to-worker shutdown and
 worker-to-master restart requests. Each request is tied to the originating
 worker, including requests waiting behind an upgrade. The worker watches an
 inherited handle to the actual master process and exits when that process dies.
-Bootstrap handles are non-inheritable in the worker, and private bootstrap
-environment variables are removed before calling `Program`. Independently
-launched child applications therefore start their own overseer master.
+Bootstrap handles are non-inheritable in the worker, and their environment
+variables are removed before calling `Program`. The legacy role, ID, and path
+variables remain visible to callers. Independently launched applications using
+the new library ignore worker metadata inherited from a parent application.
 
 ## Startup and polling
 
-`Config.StartupFetchTimeout` gives the initial check one second to return a
+`Options.StartupFetchTimeout` gives the initial check one second to return a
 binary reader before the first worker starts. Zero uses that default; a negative
 value disables the startup window. The window includes `Init`. No update or an
 error starts the installed application immediately. On timeout, the check is
@@ -44,11 +45,11 @@ so reusing one backup name would prevent later updates. A failed replacement
 restores the previous executable. Mapped backups remain until Windows permits
 deletion; subsequent replacements and master starts collect them.
 
-`Config.SanityCheckTimeout` defaults to 30 seconds on Windows and five seconds
+`Options.SanityCheckTimeout` defaults to 30 seconds on Windows and five seconds
 elsewhere, allowing first-run executable scanning. Validation only establishes
 that the candidate understands overseer's bootstrap protocol.
 
-For application-health recovery, opt in to `Config.ReadyTimeout` and call
+For application-health recovery, opt in to `Options.ReadyTimeout` and call
 `State.Ready()` after initialization on **every** worker start. The master keeps
 a separate copy of the acknowledged executable, including across multiple staged
 updates while busy. A candidate that fails to start, exits before readiness, or
@@ -59,7 +60,9 @@ If the candidate disappears after activation approval, restoration can install
 the retained image into the now-empty executable path.
 For a startup-window upgrade, the executable originally launched is preserved
 until the candidate activates. A failed startup candidate can therefore recover
-before any worker has been acknowledged. Without a startup upgrade or a previous
+before any worker has been acknowledged. The installer lease spans staging and
+activation. Termination between them restores the original under that same lease.
+Without a startup upgrade or a previous
 acknowledged image, an initial worker cannot be rolled back.
 Recovery failure returns an error; it does not loop indefinitely.
 `RunErr` returns `ErrStopped` when termination interrupts startup or recovery;
@@ -89,11 +92,11 @@ for an application's backup or installer recovery strategy.
 
 ## Upgrade outcomes
 
-Downloading and staging are separate from activation. `Config.OnUpgrade` reports
+Downloading and staging are separate from activation. `Options.OnUpgrade` reports
 `rejected`, `staged`, `activated`, and `rolled_back`, using the binary's SHA-1
 content ID (the same identifier as `State.ID`). IDs identify content; they do not
 authenticate it. Only `activated` acknowledges a working application when
-readiness is enabled. `MasterInfo` exposes `ActiveID` and `StagedID` separately.
+readiness is enabled. `MasterUpgradeInfo` exposes `ActiveID` and `StagedID`.
 The master also emits initial activation; a recovery of the same active ID does
 not emit another activation event.
 
@@ -168,8 +171,8 @@ candidate removal during old-worker shutdown. Regressions cover predicate
 status/force calls, termination during policy evaluation, fallback listener and
 signal cleanup, late fetch rejection, and sanity-command cancellation. The
 startup suite checks an accepted stream that exceeds the window, canceled HTTP
-lookups, discarded late legacy results, startup rollback, and denied startup
-activation, including with readiness disabled. The
+lookups, discarded late legacy results, startup rollback, denied startup
+activation, and termination after staging, including with readiness disabled. The
 fallback test sends real SIGTERM on Unix; Windows checks supervisor cleanup
 before terminating its subprocess.
 

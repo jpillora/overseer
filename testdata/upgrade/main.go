@@ -92,9 +92,10 @@ func main() {
 		},
 		OnPanic: func(*opanic.Snapshot) {},
 	}
+	var options overseer.Options
 	if value := os.Getenv("OVERSEER_POC_STARTUP_TIMEOUT"); value != "" {
 		var err error
-		cfg.StartupFetchTimeout, err = time.ParseDuration(value)
+		options.StartupFetchTimeout, err = time.ParseDuration(value)
 		if err != nil {
 			panic(err)
 		}
@@ -103,10 +104,10 @@ func main() {
 		cfg.Fetcher = &fetcher.HTTP{URL: os.Getenv("OVERSEER_POC_URL"), Interval: time.Hour, Timeout: 10 * time.Second}
 	}
 	if os.Getenv("OVERSEER_POC_READY") != "" {
-		cfg.ReadyTimeout = 700 * time.Millisecond
+		options.ReadyTimeout = 700 * time.Millisecond
 	}
 	var events sync.Mutex
-	cfg.OnUpgrade = func(e overseer.UpgradeEvent) {
+	options.OnUpgrade = func(e overseer.UpgradeEvent) {
 		events.Lock()
 		defer events.Unlock()
 		f, err := os.OpenFile(filepath.Join(root, "events"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -120,6 +121,10 @@ func main() {
 		cfg.Address = address
 	}
 	cfg.Program = func(state overseer.State) {
+		if os.Getenv("OVERSEER_IS_WORKER") != "1" || os.Getenv("OVERSEER_IS_SLAVE") != "1" ||
+			os.Getenv("OVERSEER_BIN_ID") != state.ID || os.Getenv("OVERSEER_BIN_PATH") != state.BinPath {
+			panic("worker environment broke legacy callers")
+		}
 		if f, err := os.OpenFile(filepath.Join(root, "starts"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); err == nil {
 			fmt.Fprintln(f, version)
 			f.Close()
@@ -189,7 +194,7 @@ func main() {
 		}
 		os.WriteFile(filepath.Join(root, fmt.Sprintf("cleaned-%d", os.Getpid())), []byte(version), 0600)
 	}
-	if err := overseer.RunErr(cfg); err != nil {
+	if err := overseer.RunErrWithOptions(cfg, options); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

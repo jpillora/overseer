@@ -28,6 +28,7 @@ import (
 // a overseer master process
 type master struct {
 	*Config
+	Options
 	workerID            int
 	workerMux           sync.Mutex
 	workerCmd           *exec.Cmd
@@ -38,7 +39,7 @@ type master struct {
 	binPerms            os.FileMode
 	binHash             []byte
 	upgradeMux          sync.Mutex
-	activationRelease   func() // installer lock transferred from restart approval to cmd.Start
+	activationRelease   func() // installer lock transferred from staging or restart approval to fork
 	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
@@ -60,6 +61,7 @@ type master struct {
 	forkedHash          []byte
 	done                chan struct{}
 	shutdownOnce        sync.Once
+	shutdownErr         error
 	signals             chan os.Signal
 	signalsDone         chan struct{}
 	disabled            bool
@@ -67,10 +69,15 @@ type master struct {
 	cancel              context.CancelFunc
 }
 
-func (mp *master) run() error {
+func (mp *master) run() (result error) {
 	mp.done = make(chan struct{})
 	mp.ctx, mp.cancel = context.WithCancel(context.Background())
-	defer mp.shutdown()
+	defer func() {
+		if err := mp.shutdown(); err != nil {
+			mp.warnf("startup rollback: %s", err)
+			result = errors.Join(result, err)
+		}
+	}()
 	mp.debugf("run")
 	if err := mp.checkBinary(); err != nil {
 		return err
@@ -341,12 +348,12 @@ func (mp *master) fetch() {
 		}
 	}
 	reader, err := mp.fetchReader(mp.lifecycleContext())
-	mp.processFetched(reader, err, true)
+	mp.processFetched(reader, err, false)
 }
 
 // processFetched and fetcher acknowledgements run only on the fetching goroutine.
-func (mp *master) processFetched(reader io.Reader, fetchErr error, restart bool) {
-	event, installed, err := mp.installCandidate(reader, fetchErr)
+func (mp *master) processFetched(reader io.Reader, fetchErr error, startup bool) {
+	event, installed, err := mp.installCandidate(reader, fetchErr, startup)
 	if err != nil {
 		event = mp.upgradeEvent(event.ID, UpgradeRejected, err)
 	}
@@ -361,7 +368,7 @@ func (mp *master) processFetched(reader io.Reader, fetchErr error, restart bool)
 		return
 	}
 	mp.dispatchUpgrade(event)
-	if restart && !mp.NoRestartAfterFetch {
+	if !startup && !mp.NoRestartAfterFetch {
 		mp.tryRestart()
 	}
 }
@@ -373,7 +380,7 @@ func (mp *master) fetchReader(ctx context.Context) (io.Reader, error) {
 	return mp.Fetcher.Fetch()
 }
 
-func (mp *master) installCandidate(reader io.Reader, fetchErr error) (event UpgradeEvent, installed bool, result error) {
+func (mp *master) installCandidate(reader io.Reader, fetchErr error, startup bool) (event UpgradeEvent, installed bool, result error) {
 	if mp.printCheckUpdate {
 		mp.debugf("checking for updates...")
 	}
@@ -468,7 +475,7 @@ func (mp *master) installCandidate(reader io.Reader, fetchErr error) (event Upgr
 	checkCtx, cancelCheck := context.WithTimeout(parentCtx, checkTimeout)
 	defer cancelCheck()
 	cmd := exec.CommandContext(checkCtx, tmpBinPath)
-	cmd.Env = append(os.Environ(), envBinCheck+"="+tokenIn)
+	cmd.Env = append(os.Environ(), envBinCheck+"="+tokenIn, envBinCheckLegacy+"="+tokenIn)
 	cmd.Args = os.Args
 	cmd.WaitDelay = time.Second
 	tokenOut, err := cmd.CombinedOutput()
@@ -509,7 +516,7 @@ func (mp *master) installCandidate(reader io.Reader, fetchErr error) (event Upgr
 		mp.upgradeMux.Unlock()
 		return event, false, ErrStopped
 	}
-	if err := mp.saveRollback(); err != nil {
+	if err := mp.saveRollback(startup); err != nil {
 		release()
 		mp.upgradeMux.Unlock()
 		return event, false, err
@@ -524,10 +531,15 @@ func (mp *master) installCandidate(reader io.Reader, fetchErr error) (event Upgr
 	mp.restartMux.Lock()
 	oldHash := mp.binHash
 	mp.binHash = newHash
-	mp.startupCandidate = len(mp.forkedHash) == 0
+	if startup {
+		mp.startupCandidate = true
+		mp.activationRelease = release
+	}
 	mp.restartMux.Unlock()
 	event = mp.upgradeEvent(event.ID, UpgradeStaged, nil)
-	release()
+	if !startup {
+		release()
+	}
 	mp.upgradeMux.Unlock()
 	mp.infof("upgraded binary (%x -> %x)", oldHash, newHash)
 	return event, true, nil
@@ -560,10 +572,15 @@ func (mp *master) forceNextRestart() {
 
 // info backs the exported MasterInfo() function.
 func (mp *master) info() Info {
+	info, _ := mp.infoSnapshot()
+	return info
+}
+
+func (mp *master) infoSnapshot() (Info, UpgradeInfo) {
 	mp.restartMux.Lock()
 	defer mp.restartMux.Unlock()
 	if mp.disabled {
-		return Info{}
+		return Info{}, UpgradeInfo{}
 	}
 	staged := (mp.forkedHash != nil || mp.startupCandidate) && !bytes.Equal(mp.forkedHash, mp.binHash)
 	stagedID := ""
@@ -571,13 +588,12 @@ func (mp *master) info() Info {
 		stagedID = hex.EncodeToString(mp.binHash)
 	}
 	return Info{
-		ActiveID: hex.EncodeToString(mp.forkedHash), StagedID: stagedID,
 		IsMaster:       true,
 		UpgradeStaged:  staged,
 		RestartPending: mp.pendingRestart,
 		ForceRequested: mp.forceNext,
 		WorkerForks:    mp.workerID,
-	}
+	}, UpgradeInfo{ActiveID: hex.EncodeToString(mp.forkedHash), StagedID: stagedID}
 }
 
 // startRestart atomically claims ownership of the restart and, if claimed,
@@ -720,19 +736,25 @@ func (mp *master) fork() error {
 	// Initial master startup instead trusts the explicitly started executable.
 	mp.upgradeMux.Lock()
 	mp.restartMux.Lock()
-	release := mp.activationRelease
-	mp.activationRelease = nil
-	attempt := mp.restartDone
-	stopping := mp.stopping
-	startupCandidate := mp.startupCandidate
-	mp.restartMux.Unlock()
-	if stopping {
+	if mp.stopping {
+		var release func()
+		if !mp.startupCandidate {
+			release = mp.activationRelease
+			mp.activationRelease = nil
+		}
+		// Keep the lease for shutdown only while it has to restore a startup candidate.
+		mp.restartMux.Unlock()
 		if release != nil {
 			release()
 		}
 		mp.upgradeMux.Unlock()
 		return ErrStopped
 	}
+	release := mp.activationRelease
+	mp.activationRelease = nil
+	attempt := mp.restartDone
+	startupCandidate := mp.startupCandidate
+	mp.restartMux.Unlock()
 	if release == nil {
 		var err error
 		release, err = mp.lockUpgrade()
@@ -885,7 +907,7 @@ func (mp *master) fork() error {
 	cmdwait := make(chan error, 1)
 	go func() { cmdwait <- cmd.Wait() }()
 	mp.restartMux.Lock()
-	stopping = mp.stopping
+	stopping := mp.stopping
 	mp.restartMux.Unlock()
 	if stopping {
 		_ = cmd.Process.Kill()
