@@ -1,7 +1,7 @@
 // A tiny helper binary used by waitdelay_integration_test.go.
 // It spawns a long-running grandchild that inherits its stderr,
-// then exits cleanly. Mirrors the rais vscode case where a
-// subprocess outlives the worker but keeps the worker→master
+// then exits cleanly. The subprocess outlives the worker
+// but keeps the worker-to-master
 // pipe write-end open.
 //
 // The grandchild prints its PID so cleanup can target only this helper.
