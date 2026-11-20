@@ -1,6 +1,9 @@
 package overseer
 
 import (
+	"errors"
+	"io"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -75,75 +78,40 @@ func TestRestart_ConcurrentRaceFree(t *testing.T) {
 	wg.Wait()
 }
 
-// Regression: when startRestart times out, mp.restarting stays true, so
-// the next fork()'s "notify success" path tried to send on the unbuffered
-// mp.restarted channel with no reader and hung the master forever. The
-// fix made that send non-blocking; this test exercises the same code path
-// directly and asserts it returns instead of deadlocking.
-func TestForkNotifyRestart_NoReceiver_DoesNotBlock(t *testing.T) {
-	mp := &master{Config: &Config{}}
-	mp.restarted = make(chan bool)
+func TestRestartCompletionIsPerAttempt(t *testing.T) {
+	first, second := make(chan struct{}), make(chan struct{})
+	mp := &master{Config: &Config{}, restarting: true, restartDone: first}
+	mp.completeRestart(first) // Completion is durable even after the waiter timed out.
+	mp.restartMux.Lock()
 	mp.restarting = true
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		mp.restartMux.Lock()
-		wasRestarting := mp.restarting
-		if wasRestarting {
-			mp.restarting = false
-		}
-		mp.restartMux.Unlock()
-		if wasRestarting {
-			select {
-			case mp.restarted <- true:
-			default:
-			}
-		}
-	}()
+	mp.restartDone = second
+	mp.restartMux.Unlock()
+	mp.completeRestart(nil)   // Initial fork must not acknowledge a later request.
+	mp.completeRestart(first) // Nor may an old fork complete the next attempt.
 	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("notify-restart path blocked with no receiver — fix regressed")
+	case <-first:
+	default:
+		t.Fatal("first attempt not completed")
 	}
-	if mp.restarting {
-		t.Fatal("restarting must be cleared even when notification is dropped")
+	select {
+	case <-second:
+		t.Fatal("old completion completed the next attempt")
+	default:
+	}
+	mp.completeRestart(second)
+	select {
+	case <-second:
+	default:
+		t.Fatal("second attempt not completed")
 	}
 }
 
-// When startRestart is actually parked on its receive, the send must reach
-// the receiver — non-blocking is for the timeout-path-receiver-gone case
-// only. In production startRestart enters its select long before fork()
-// can run (worker death + new fork in between); the test simulates that
-// ordering by retrying the non-blocking send until it lands.
-func TestForkNotifyRestart_Receiver_GetsNotified(t *testing.T) {
-	mp := &master{Config: &Config{}}
-	mp.restarted = make(chan bool)
-	mp.restarting = true
-	got := make(chan bool, 1)
-	go func() { got <- <-mp.restarted }()
-	mp.restartMux.Lock()
-	wasRestarting := mp.restarting
-	if wasRestarting {
-		mp.restarting = false
-	}
-	mp.restartMux.Unlock()
-	deadline := time.Now().Add(2 * time.Second)
-	delivered := false
-	for wasRestarting && !delivered && time.Now().Before(deadline) {
-		select {
-		case mp.restarted <- true:
-			delivered = true
-		default:
-			time.Sleep(time.Millisecond)
-		}
-	}
-	if !delivered {
-		t.Fatal("send never landed despite a parked receiver")
-	}
-	select {
-	case <-got:
-	case <-time.After(2 * time.Second):
-		t.Fatal("receiver never observed the notification")
+func TestStaleRestartRequestDoesNotTargetReplacement(t *testing.T) {
+	old, replacement := &exec.Cmd{}, &exec.Cmd{}
+	mp := &master{Config: &Config{AuthorizeUpgrade: func(string) error { t.Fatal("stale request reached hook"); return nil }}, workerCmd: replacement}
+	mp.startRestartFor(old, false)
+	if mp.restarting || len(mp.pendingSignals) != 0 {
+		t.Fatal("stale request restarted replacement")
 	}
 }
 
@@ -276,4 +244,96 @@ func TestForceInfo_ConcurrentRaceFree(t *testing.T) {
 		go func() { defer wg.Done(); mp.tryRestart() }()
 	}
 	wg.Wait()
+}
+
+type resultErrorFetcher struct {
+	observed, resume chan struct{}
+	calls            int
+}
+
+func (f *resultErrorFetcher) Init() error { return nil }
+func (f *resultErrorFetcher) Fetch() (io.Reader, error) {
+	f.calls++
+	return nil, errors.New("download rejected")
+}
+func (f *resultErrorFetcher) FetchResult(error) { close(f.observed); <-f.resume }
+
+func TestFetchOutcomePrecedesSlowResultCallback(t *testing.T) {
+	f := &resultErrorFetcher{observed: make(chan struct{}), resume: make(chan struct{})}
+	events := make(chan UpgradeEvent, 1)
+	mp := &master{Config: &Config{Fetcher: f, NoWarn: true}, Options: Options{OnUpgrade: func(e UpgradeEvent) { events <- e }}}
+	done := make(chan struct{})
+	go func() { mp.fetch(); close(done) }()
+	select {
+	case <-f.observed:
+	case <-time.After(time.Second):
+		t.Fatal("fetch result missing")
+	}
+	newer := mp.upgradeEvent("newer", UpgradeActivated, nil)
+	close(f.resume)
+	<-done
+	rejected := <-events
+	if rejected.Status != UpgradeRejected || rejected.Err == nil || rejected.Sequence >= newer.Sequence {
+		t.Fatalf("late result regressed outcome order: %+v after %+v", rejected, newer)
+	}
+}
+
+func TestSkippedFetchDoesNotAcknowledgeResult(t *testing.T) {
+	f := &resultErrorFetcher{observed: make(chan struct{}), resume: make(chan struct{})}
+	close(f.resume)
+	mp := &master{Config: &Config{Fetcher: f}, restarting: true}
+	mp.fetch()
+	if f.calls != 0 {
+		t.Fatal("fetched during restart")
+	}
+	select {
+	case <-f.observed:
+		t.Fatal("acknowledged a fetch that did not happen")
+	default:
+	}
+}
+
+func TestShouldRestartMayInspectMasterAndRequestForce(t *testing.T) {
+	mp := &master{Config: &Config{}}
+	previous := currentProcess
+	currentProcess = mp
+	defer func() { currentProcess = previous }()
+	mp.ShouldRestart = func() bool {
+		if !MasterInfo().IsMaster {
+			t.Error("predicate cannot inspect master")
+		}
+		ForceNextRestart()
+		return false
+	}
+	done := make(chan struct{})
+	go func() { mp.tryRestart(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("predicate deadlocked on public master APIs")
+	}
+	if mp.info().RestartPending || mp.info().ForceRequested {
+		t.Fatal("force request was not consumed", mp.info())
+	}
+}
+
+func TestTerminationDuringShouldRestartAbortsAttempt(t *testing.T) {
+	entered, resume := make(chan struct{}), make(chan struct{})
+	mp := &master{Config: &Config{RestartSignal: SIGUSR2, ShouldRestart: func() bool { close(entered); <-resume; return false }}, workerCmd: &exec.Cmd{}}
+	done := make(chan struct{})
+	go func() { mp.tryRestart(); close(done) }()
+	<-entered
+	signalled := make(chan struct{})
+	go func() { mp.handleSignal(SIGTERM); close(signalled) }()
+	select {
+	case <-signalled:
+	case <-time.After(time.Second):
+		close(resume)
+		t.Fatal("predicate blocked termination")
+	}
+	close(resume)
+	<-done
+	if !mp.stopping || mp.restarting || mp.pendingRestart {
+		t.Fatal("stopped attempt changed restart state")
+	}
 }

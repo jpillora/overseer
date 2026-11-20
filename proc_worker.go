@@ -1,12 +1,9 @@
 package overseer
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"os"
-	"os/signal"
-	"strconv"
 	"time"
 )
 
@@ -44,6 +41,18 @@ type State struct {
 	BinPath string
 }
 
+// Ready acknowledges successful application initialization. It is safe to call
+// repeatedly. With ReadyTimeout disabled (or overseer disabled) it is a no-op.
+// Call only after the application can serve requests and its resources are ready.
+func (s State) Ready() error {
+	if s.Enabled && s.GracefulShutdown != nil {
+		if sp, ok := currentProcess.(*worker); ok && sp.state.GracefulShutdown == s.GracefulShutdown && sp.ready != nil {
+			return sp.ready()
+		}
+	}
+	return nil
+}
+
 //a overseer worker process
 
 type worker struct {
@@ -52,10 +61,17 @@ type worker struct {
 	listeners  []*overseerListener
 	masterPid  int
 	masterProc *os.Process
+	control    *workerControl
 	state      State
+	ready      func() error
 }
 
-func (sp *worker) run() error {
+func (sp *worker) run() (err error) {
+	defer func() {
+		if err != nil {
+			clearBootstrapEnvironment()
+		}
+	}()
 	// Prefer the new env var; fall back to the legacy OVERSEER_SLAVE_ID so a
 	// worker forked by a pre-rename master still gets its id.
 	if id := os.Getenv(envWorkerID); id != "" {
@@ -77,73 +93,18 @@ func (sp *worker) run() error {
 	if err := sp.initFileDescriptors(); err != nil {
 		return err
 	}
+	if err := sp.initReady(); err != nil {
+		return err
+	}
 	sp.watchSignal()
+	clearWorkerTransport()
+	if err := os.Setenv(envWorkerBootstrapped, "1"); err != nil {
+		return err
+	}
 	//run program with state
 	sp.debugf("start program")
 	sp.Config.Program(sp.state)
 	return nil
-}
-
-func (sp *worker) initFileDescriptors() error {
-	//inspect file descriptors
-	numFDs, err := strconv.Atoi(os.Getenv(envNumFDs))
-	if err != nil {
-		return fmt.Errorf("invalid %s integer", envNumFDs)
-	}
-	sp.listeners = make([]*overseerListener, numFDs)
-	sp.state.Listeners = make([]net.Listener, numFDs)
-	for i := 0; i < numFDs; i++ {
-		f := os.NewFile(uintptr(3+i), "")
-		l, err := net.FileListener(f)
-		if err != nil {
-			return fmt.Errorf("failed to inherit file descriptor: %d", i)
-		}
-		u := newOverseerListener(l)
-		sp.listeners[i] = u
-		sp.state.Listeners[i] = u
-	}
-	if len(sp.state.Listeners) > 0 {
-		sp.state.Listener = sp.state.Listeners[0]
-	}
-	return nil
-}
-
-func (sp *worker) watchSignal() {
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, sp.Config.RestartSignal)
-	go func() {
-		<-signals
-		signal.Stop(signals)
-		sp.infof("graceful shutdown requested")
-		//master wants to restart,
-		close(sp.state.GracefulShutdown)
-		//release any sockets and notify master
-		if len(sp.listeners) > 0 {
-			//perform graceful shutdown
-			for _, l := range sp.listeners {
-				l.release(sp.Config.TerminateTimeout)
-			}
-			//signal release of held sockets, allows master to start
-			//a new process before this child has actually exited.
-			//early restarts not supported with restarts disabled.
-			if !sp.NoRestart {
-				sp.masterProc.Signal(SIGUSR1)
-			}
-			//listeners should be waiting on connections to close...
-		}
-		//start death-timer
-		go func() {
-			time.Sleep(sp.Config.TerminateTimeout)
-			sp.infof("timeout. forceful shutdown")
-			os.Exit(1)
-		}()
-	}()
-}
-
-func (sp *worker) triggerRestart() {
-	if err := sp.masterProc.Signal(sp.Config.RestartSignal); err != nil {
-		os.Exit(1)
-	}
 }
 
 func (sp *worker) forceNextRestart() {

@@ -1,7 +1,7 @@
 package fetcher
 
 import (
-	"compress/gzip"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -34,9 +34,10 @@ type S3 struct {
 	//GetTimeout defaults to 5 minutes
 	GetTimeout time.Duration
 	//interal state
-	client   *http.Client
-	delay    bool
-	lastETag string
+	client       *http.Client
+	delay        bool
+	lastETag     string
+	previousETag string
 }
 
 // Init validates the provided config
@@ -73,17 +74,27 @@ func (s *S3) Init() error {
 
 // Fetch the binary from S3
 func (s *S3) Fetch() (io.Reader, error) {
+	return s.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling, credentials, and requests.
+func (s *S3) FetchContext(ctx context.Context) (io.Reader, error) {
+	s.previousETag = s.lastETag
 	//delay fetches after first
 	if s.delay {
-		time.Sleep(s.Interval)
+		if err := wait(ctx, s.Interval); err != nil {
+			return nil, err
+		}
 	}
 	s.delay = true
 	//http client where we change the timeout
 	c := http.Client{}
 	//options for this key
-	creds := s3.AmbientCredentials()
-	if s.Access != "" && s.Secret != "" {
-		creds = s3.Credentials(s.Access, s.Secret)
+	// The dependency's ambient IAM role lookup has an unbounded request.
+	// Resolve it with the same complete-request deadline as our HEAD checks.
+	creds, err := s.credentialsContext(ctx, &http.Client{Timeout: s.HeadTimeout}, "http://169.254.169.254/latest/meta-data/iam/security-credentials/")
+	if err != nil {
+		return nil, err
 	}
 	opts := []s3.Option{creds, s3.Region(s.Region), s3.Bucket(s.Bucket), s3.Key(s.Key)}
 	//status check using HEAD
@@ -92,10 +103,11 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return nil, err
 	}
 	c.Timeout = s.HeadTimeout
-	resp, err := c.Do(req)
+	resp, err := c.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HEAD request failed (%s)", resp.Status)
 	}
@@ -110,17 +122,21 @@ func (s *S3) Fetch() (io.Reader, error) {
 		return nil, err
 	}
 	c.Timeout = s.GetTimeout
-	resp, err = c.Do(req)
+	resp, err = c.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("GET request failed (%s)", resp.Status)
 	}
-	//extract gz files
-	if strings.HasSuffix(s.Key, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
-		return gzip.NewReader(resp.Body)
-	}
-	//success!
-	return resp.Body, nil
+	return responseReader(resp, strings.HasSuffix(s.Key, ".gz"))
 }
+
+func (s *S3) FetchResult(err error) {
+	if err != nil {
+		s.lastETag = s.previousETag
+	}
+}
+
+func (s *S3) Reset() { s.lastETag = "" }

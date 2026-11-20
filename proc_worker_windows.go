@@ -6,8 +6,6 @@ package overseer
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/StackExchange/wmi"
@@ -56,26 +54,6 @@ type Win32_Process struct {
 	WorkingSetSize        uint64
 }
 
-func (sp *worker) watchParent() error {
-	sp.masterPid = os.Getppid()
-	proc, err := os.FindProcess(sp.masterPid)
-	if err != nil {
-		return fmt.Errorf("master process: %s", err)
-	}
-	sp.masterProc = proc
-	go func() {
-		//send signal 0 to master process forever
-		for {
-			//should not error as long as the process is alive
-			if _, err := GetWin32Proc(int32(sp.masterPid)); err != nil {
-				os.Exit(1)
-			}
-			time.Sleep(2 * time.Second)
-		}
-	}()
-	return nil
-}
-
 func GetWin32Proc(pid int32) ([]Win32_Process, error) {
 	return GetWin32ProcWithContext(context.Background(), pid)
 }
@@ -114,17 +92,4 @@ func WMIQueryWithContext(ctx context.Context, query string, dst interface{}, con
 	case err := <-errChan:
 		return err
 	}
-}
-
-// overwrite: see https://github.com/jpillora/overseer/issues/56#issuecomment-656405955
-func overwrite(dst, src string) error {
-	old := strings.TrimSuffix(dst, ".exe") + "-old.exe"
-	if err := move(old, dst); err != nil {
-		return err
-	}
-	if err := move(dst, src); err != nil {
-		return err
-	}
-	os.Remove(old)
-	return nil
 }

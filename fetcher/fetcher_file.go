@@ -1,6 +1,7 @@
 package fetcher
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,8 +17,9 @@ type File struct {
 	Path     string
 	Interval time.Duration
 	// hash is the file modify time and its size
-	hash  string
-	delay bool
+	hash         string
+	previousHash string
+	delay        bool
 }
 
 // Init sets the Path and Interval options
@@ -36,9 +38,20 @@ func (f *File) Init() error {
 
 // Fetch file from the specified Path
 func (f *File) Fetch() (io.Reader, error) {
+	return f.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling and file-stability waits.
+func (f *File) FetchContext(ctx context.Context) (io.Reader, error) {
+	f.previousHash = f.hash
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	//only delay after first fetch
 	if f.delay {
-		time.Sleep(f.Interval)
+		if err := wait(ctx, f.Interval); err != nil {
+			return nil, err
+		}
 	}
 	f.delay = true
 	lastHash := f.hash
@@ -66,7 +79,10 @@ func (f *File) Fetch() (io.Reader, error) {
 		}
 		attempt++
 		//sleep
-		time.Sleep(rate)
+		if err := wait(ctx, rate); err != nil {
+			file.Close()
+			return nil, err
+		}
 		//check hash!
 		if err := f.updateHash(); err != nil {
 			file.Close()
@@ -78,8 +94,18 @@ func (f *File) Fetch() (io.Reader, error) {
 		}
 		lastHash = f.hash
 	}
-	return file, nil
+	if ctx.Done() == nil {
+		return file, nil
+	}
+	return &contextFile{File: file, stop: context.AfterFunc(ctx, func() { file.Close() })}, nil
 }
+
+type contextFile struct {
+	*os.File
+	stop func() bool
+}
+
+func (f *contextFile) Close() error { f.stop(); return f.File.Close() }
 
 func (f *File) updateHash() error {
 	file, err := os.Open(f.Path)
@@ -98,3 +124,11 @@ func (f *File) updateHash() error {
 	f.hash = fmt.Sprintf("%d|%d", s.ModTime().UnixNano(), s.Size())
 	return nil
 }
+
+func (f *File) FetchResult(err error) {
+	if err != nil {
+		f.hash = f.previousHash
+	}
+}
+
+func (f *File) Reset() { f.hash = "" }

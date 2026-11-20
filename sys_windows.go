@@ -4,10 +4,9 @@
 package overseer
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -23,20 +22,46 @@ var (
 )
 
 func move(dst, src string) error {
-	os.MkdirAll(filepath.Dir(dst), 0755)
-	if err := os.Rename(src, dst); err == nil {
-		return nil
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
 	}
-	//HACK: we're shelling out to move because windows
-	//throws errors when crossing device boundaries.
-	// https://www.microsoft.com/resources/documentation/windows/xp/all/proddocs/en-us/move.mspx?mfr=true
+	return os.Rename(src, dst)
+}
 
-	// https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way/
-	R := func(s string) string { return replShellMeta.Replace(syscall.EscapeArg(s)) }
-	cmd := exec.Command("cmd", "/c", `move /y `+R(src)+` `+R(dst))
-	if b, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %q: %v", cmd.Args, bytes.TrimSpace(b), err)
+func overwrite(dst, src string) error {
+	// The master keeps the original image mapped across every upgrade. A fixed
+	// backup name would therefore block the second replacement on Windows.
+	f, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".overseer-previous-*"+extension())
+	if err != nil {
+		return err
 	}
+	backup := f.Name()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(backup); err != nil {
+		return err
+	}
+	hadDestination := true
+	if err := os.Rename(dst, backup); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		// A candidate can disappear after activation approval (for example,
+		// quarantine). The retained good image can still restore an empty path.
+		hadDestination = false
+	}
+	if err := os.Rename(src, dst); err != nil {
+		if hadDestination {
+			if rollback := os.Rename(backup, dst); rollback != nil {
+				return fmt.Errorf("replace failed: %v; rollback failed: %w (previous binary: %s)", err, rollback, backup)
+			}
+		}
+		return err
+	}
+	// Mapped images may remain until the master or the previous worker exits.
+	// A subsequent replacement can collect them without blocking this upgrade.
+	cleanupPreviousBinaries(dst)
 	return nil
 }
 
@@ -47,23 +72,17 @@ func chmod(f *os.File, perms os.FileMode) error {
 	return nil
 }
 
-func chown(f *os.File, uid, gid int) error {
-	if err := f.Chown(uid, gid); err != nil && !strings.Contains(err.Error(), "not supported") {
-		return err
-	}
-	return nil
-}
+func chown(f *os.File, uid, gid int) error { return nil }
 
-// https://blogs.msdn.microsoft.com/twistylittlepassagesallalike/2011/04/23/everyone-quotes-command-line-arguments-the-wrong-way/
-var replShellMeta = strings.NewReplacer(
-	`(`, `^(`,
-	`)`, `^)`,
-	`%`, `^%`,
-	`!`, `^!`,
-	`^`, `^^`,
-	`"`, `^"`,
-	`<`, `^<`,
-	`>`, `^>`,
-	`&`, `^&`,
-	`|`, `^|`,
-)
+func cleanupPreviousBinaries(path string) {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return
+	}
+	prefix := "." + filepath.Base(path) + ".overseer-previous-"
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) && strings.HasSuffix(entry.Name(), extension()) {
+			_ = os.Remove(filepath.Join(filepath.Dir(path), entry.Name()))
+		}
+	}
+}

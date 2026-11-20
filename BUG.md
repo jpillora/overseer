@@ -47,14 +47,14 @@ the signal-handler goroutine. That runs before (and in place of) the
 2. The exit code to systemd is `1` from that `os.Exit(1)`, not the
    worker's actual exit code (`2` for a Go panic).
 
-## Reproduction (rais-alt, v1.3.0, `RAIS_DEBUG=1`)
+## Reproduction (overseer v1.3.0, debug logging enabled)
 
 Trigger a panic in the worker (divide-by-zero in a goroutine, nil
 dereference, or explicit `os.Exit(2)` after writing a fake `panic:` header
 — all behave identically). Master debug log:
 
 ```
-[overseer master] starting /home/ubuntu/raisdev/alt/bin/rais
+[overseer master] starting /path/to/application
 [overseer master] proxy signal (urgent I/O condition)
 panic: runtime error: integer divide by zero
 [overseer master] proxy signal (urgent I/O condition)

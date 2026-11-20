@@ -2,6 +2,7 @@ package overseer
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
@@ -9,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,28 +21,37 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jpillora/overseer/fetcher"
 	"github.com/jpillora/overseer/opanic"
 )
-
-var tmpBinPath = filepath.Join(os.TempDir(), "overseer-"+token()+extension())
 
 // a overseer master process
 type master struct {
 	*Config
+	Options
 	workerID            int
 	workerMux           sync.Mutex
 	workerCmd           *exec.Cmd
 	pendingSignals      []os.Signal
 	workerExtraFiles    []*os.File
-	binPath, tmpBinPath string
+	binPath             string
+	control             *workerControl
 	binPerms            os.FileMode
 	binHash             []byte
 	upgradeMux          sync.Mutex
-	activationRelease   func() // installer lock transferred from restart approval to cmd.Start
+	activationRelease   func() // installer lock transferred from staging or restart approval to fork
 	restartMux          sync.Mutex
 	restarting          bool
 	restartedAt         time.Time
-	restarted           chan bool
+	restartDone         chan struct{}
+	fetchOnce           sync.Once
+	fetchStart          chan struct{} // releases background polling after first worker activation
+	startupCandidate    bool          // protected by restartMux; transitions also hold upgradeMux
+	rollbackPath        string
+	rollbackHash        []byte
+	eventSequence       uint64
+	resetFetcher        bool
+	stopping            bool
 	awaitingUSR1        bool
 	descriptorsReleased chan bool
 	signalledAt         time.Time
@@ -50,29 +59,44 @@ type master struct {
 	pendingRestart      bool
 	forceNext           bool
 	forkedHash          []byte
+	done                chan struct{}
+	shutdownOnce        sync.Once
+	shutdownErr         error
+	signals             chan os.Signal
+	signalsDone         chan struct{}
+	disabled            bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
 }
 
-func (mp *master) run() error {
+func (mp *master) run() (result error) {
+	mp.done = make(chan struct{})
+	mp.ctx, mp.cancel = context.WithCancel(context.Background())
+	defer func() {
+		if err := mp.shutdown(); err != nil {
+			mp.warnf("startup rollback: %s", err)
+			result = errors.Join(result, err)
+		}
+	}()
 	mp.debugf("run")
 	if err := mp.checkBinary(); err != nil {
 		return err
-	}
-	if mp.Config.Fetcher != nil {
-		if err := mp.Config.Fetcher.Init(); err != nil {
-			mp.warnf("fetcher init failed (%s). fetcher disabled.", err)
-			mp.Config.Fetcher = nil
-		}
 	}
 	mp.setupSignalling()
 	if err := mp.retreiveFileDescriptors(); err != nil {
 		return err
 	}
-	if mp.Config.Fetcher != nil {
-		mp.printCheckUpdate = true
-		mp.fetch()
-		go mp.fetchLoop()
+	err := mp.startupFetch()
+	if err == nil {
+		err = mp.forkLoop()
 	}
-	return mp.forkLoop()
+	mp.restartMux.Lock()
+	stopping := mp.stopping
+	mp.restartMux.Unlock()
+	if stopping {
+		return fmt.Errorf("%w: %v", ErrStopped, err)
+	}
+	return err
 }
 
 func (mp *master) checkBinary() error {
@@ -99,36 +123,56 @@ func (mp *master) checkBinary() error {
 	io.Copy(hash, f)
 	mp.binHash = hash.Sum(nil)
 	f.Close()
-	//test bin<->tmpbin moves
 	if mp.Config.Fetcher != nil {
-		if err := move(tmpBinPath, mp.binPath); err != nil {
-			return fmt.Errorf("cannot move binary (%s)", err)
+		probe, err := os.CreateTemp(filepath.Dir(mp.binPath), ".overseer-write-check-*")
+		if err != nil {
+			return fmt.Errorf("cannot write binary directory: %w", err)
 		}
-		if err := move(mp.binPath, tmpBinPath); err != nil {
-			return fmt.Errorf("cannot move binary back (%s)", err)
-		}
+		probe.Close()
+		os.Remove(probe.Name())
 	}
 	return nil
 }
 
 func (mp *master) setupSignalling() {
+	if mp.done == nil {
+		mp.done = make(chan struct{})
+	}
 	//updater-forker comms
-	mp.restarted = make(chan bool)
 	mp.descriptorsReleased = make(chan bool)
 	//read all master process signals. Buffer of 1 satisfies signal.Notify's
 	//requirement that the channel never block; the actual queueing for the
 	//fork window happens in handleSignal under workerMux.
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals)
+	mp.signals = make(chan os.Signal, 1)
+	mp.signalsDone = make(chan struct{})
+	signal.Notify(mp.signals)
 	go func() {
-		for s := range signals {
-			mp.handleSignal(s)
+		defer close(mp.signalsDone)
+		for {
+			select {
+			case <-mp.done:
+				return
+			case s := <-mp.signals:
+				mp.handleSignal(s)
+			}
 		}
 	}()
 }
 
 func (mp *master) handleSignal(s os.Signal) {
-	if s == mp.RestartSignal {
+	mp.restartMux.Lock()
+	if mp.disabled {
+		mp.restartMux.Unlock()
+		return
+	}
+	if s == os.Interrupt || s == SIGTERM {
+		mp.stopping = true
+	}
+	mp.restartMux.Unlock()
+	if (s == os.Interrupt || s == SIGTERM) && mp.cancel != nil {
+		mp.cancel()
+	}
+	if s == mp.RestartSignal && s != os.Interrupt && s != SIGTERM {
 		//user initiated manual restart
 		go mp.triggerRestart()
 		return
@@ -147,18 +191,25 @@ func (mp *master) handleSignal(s os.Signal) {
 	//**during a restart** a SIGUSR1 signals
 	//to the master process that, the file
 	//descriptors have been released
-	if s == SIGUSR1 {
+	if s == SIGUSR1 && s != SIGTERM {
 		mp.restartMux.Lock()
 		awaiting := mp.awaitingUSR1
+		released := mp.descriptorsReleased
 		if awaiting {
 			mp.awaitingUSR1 = false
 		}
 		mp.restartMux.Unlock()
 		if awaiting {
 			mp.debugf("signaled, sockets ready")
-			mp.descriptorsReleased <- true
+			select {
+			case released <- true:
+			default:
+			}
 			return
 		}
+		// SIGUSR1 is private socket-handoff traffic. A late release from a
+		// worker that already exited must never be forwarded to its successor.
+		return
 	}
 	//while the worker process is running, proxy all signals through.
 	//during the fork window (workerCmd set but cmd.Start() not yet
@@ -173,123 +224,191 @@ func (mp *master) handleSignal(s os.Signal) {
 		mp.debugf("signal queued (%s), worker starting", s)
 		return
 	}
-	hasWorker := mp.workerCmd != nil && mp.workerCmd.Process != nil
+	workerCmd := mp.workerCmd
+	hasWorker := workerCmd != nil && workerCmd.Process != nil
 	mp.workerMux.Unlock()
 	if hasWorker {
 		mp.debugf("proxy signal (%s)", s)
-		mp.sendSignal(s)
+		mp.sendSignalTo(workerCmd, s)
 		return
 	}
-	//otherwise if not running, kill on CTRL+c
-	if s == os.Interrupt {
-		mp.debugf("interupt with no worker")
-		os.Exit(1)
-	} else {
-		mp.debugf("signal discarded (%s), no worker process", s)
-	}
+	// During the startup update window, cancellation wakes run without starting
+	// a worker. Other signals with no current worker have nowhere to be sent.
+	mp.debugf("signal received (%s), no worker process", s)
 }
 
-func (mp *master) sendSignal(s os.Signal) {
+func (mp *master) sendSignalTo(cmd *exec.Cmd, s os.Signal) {
 	mp.workerMux.Lock()
-	proc := (*os.Process)(nil)
-	if mp.workerCmd != nil {
-		proc = mp.workerCmd.Process
-	}
-	mp.workerMux.Unlock()
-	if proc == nil {
+	if cmd == nil || mp.workerCmd != cmd {
+		mp.workerMux.Unlock()
 		return
 	}
-	if err := proc.Signal(s); err != nil {
-		// A worker that has just exited is the expected state right before
-		// cmdwait runs; short-circuiting with os.Exit(1) here skips OnPanic
-		// and overwrites the worker's real exit code.
-		if errors.Is(err, os.ErrProcessDone) {
-			return
-		}
+	proc := cmd.Process
+	if proc == nil {
+		mp.pendingSignals = append(mp.pendingSignals, s)
+		mp.workerMux.Unlock()
+		return
+	}
+	mp.workerMux.Unlock()
+	if err := mp.signalWorker(proc, s); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		mp.debugf("signal failed (%s)", err)
 	}
 }
 
-func (mp *master) retreiveFileDescriptors() error {
-	mp.workerExtraFiles = make([]*os.File, len(mp.Config.Addresses))
-	for i, addr := range mp.Config.Addresses {
-		a, err := net.ResolveTCPAddr("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("Invalid address %s (%s)", addr, err)
+// fetchLoop is run in a goroutine
+func (mp *master) startFetching() {
+	mp.fetchOnce.Do(func() {
+		if mp.Fetcher == nil {
+			return
 		}
-		l, err := net.ListenTCP("tcp", a)
-		if err != nil {
-			return err
+		if mp.fetchStart != nil {
+			close(mp.fetchStart)
+		} else {
+			// A disabled startup check retains independent worker startup.
+			go func() {
+				if err := mp.Fetcher.Init(); err != nil {
+					mp.warnf("fetcher init failed: %s", err)
+					return
+				}
+				mp.printCheckUpdate = true
+				mp.fetchLoop()
+			}()
 		}
-		f, err := l.File()
-		if err != nil {
-			return fmt.Errorf("Failed to retreive fd for: %s (%s)", addr, err)
-		}
-		if err := l.Close(); err != nil {
-			return fmt.Errorf("Failed to close listener for: %s (%s)", addr, err)
-		}
-		mp.workerExtraFiles[i] = f
-	}
-	return nil
+		go func() {
+			ticker := time.NewTicker(mp.MinFetchInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-mp.done:
+					return
+				case <-ticker.C:
+					mp.restartMux.Lock()
+					retry := mp.pendingRestart && !mp.restarting
+					mp.restartMux.Unlock()
+					if retry {
+						mp.tryRestart()
+					}
+				}
+			}
+		}()
+	})
 }
 
-// fetchLoop is run in a goroutine
 func (mp *master) fetchLoop() {
-	min := mp.Config.MinFetchInterval
-	time.Sleep(min)
 	for {
+		select {
+		case <-mp.done:
+			return
+		default:
+		}
 		t0 := time.Now()
 		mp.fetch()
-		mp.restartMux.Lock()
-		retry := mp.pendingRestart && !mp.restarting
-		mp.restartMux.Unlock()
-		if retry {
-			mp.tryRestart()
-		}
-		//duration fetch of fetch
-		diff := time.Now().Sub(t0)
-		if diff < min {
-			delay := min - diff
-			//ensures at least MinFetchInterval delay.
-			//should be throttled by the fetcher!
-			time.Sleep(delay)
+		if delay := mp.MinFetchInterval - time.Since(t0); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-mp.done:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
 	}
 }
 
+// Record transitions while upgradeMux still protects the executable state.
+func (mp *master) upgradeEvent(id string, status UpgradeStatus, err error) UpgradeEvent {
+	mp.restartMux.Lock()
+	defer mp.restartMux.Unlock()
+	mp.eventSequence++
+	return UpgradeEvent{Sequence: mp.eventSequence, ID: id, Status: status, Err: err}
+}
+func (mp *master) dispatchUpgrade(event UpgradeEvent) {
+	mp.restartMux.Lock()
+	disabled := mp.disabled
+	mp.restartMux.Unlock()
+	if disabled {
+		return
+	}
+	if mp.OnUpgrade != nil {
+		mp.OnUpgrade(event)
+	}
+}
 func (mp *master) fetch() {
 	mp.restartMux.Lock()
-	restarting := mp.restarting
-	mp.restartMux.Unlock()
-	if restarting {
-		return //skip if restarting
+	if mp.restarting || mp.stopping {
+		mp.restartMux.Unlock()
+		return
 	}
+	reset := mp.resetFetcher
+	mp.resetFetcher = false
+	mp.restartMux.Unlock()
+	if reset {
+		if f, ok := mp.Fetcher.(fetcher.Resetter); ok {
+			f.Reset()
+		}
+	}
+	reader, err := mp.fetchReader(mp.lifecycleContext())
+	mp.processFetched(reader, err, false)
+}
+
+// processFetched and fetcher acknowledgements run only on the fetching goroutine.
+func (mp *master) processFetched(reader io.Reader, fetchErr error, startup bool) {
+	event, installed, err := mp.installCandidate(reader, fetchErr, startup)
+	if err != nil {
+		event = mp.upgradeEvent(event.ID, UpgradeRejected, err)
+	}
+	if receiver, ok := mp.Fetcher.(fetcher.Result); ok {
+		receiver.FetchResult(err)
+	}
+	if err != nil {
+		mp.dispatchUpgrade(event)
+		return
+	}
+	if !installed {
+		return
+	}
+	mp.dispatchUpgrade(event)
+	if !startup && !mp.NoRestartAfterFetch {
+		mp.tryRestart()
+	}
+}
+
+func (mp *master) fetchReader(ctx context.Context) (io.Reader, error) {
+	if f, ok := mp.Fetcher.(fetcher.ContextFetcher); ok {
+		return f.FetchContext(ctx)
+	}
+	return mp.Fetcher.Fetch()
+}
+
+func (mp *master) installCandidate(reader io.Reader, fetchErr error, startup bool) (event UpgradeEvent, installed bool, result error) {
 	if mp.printCheckUpdate {
 		mp.debugf("checking for updates...")
 	}
-	reader, err := mp.Fetcher.Fetch()
-	if err != nil {
-		mp.debugf("failed to get latest version: %s", err)
-		return
+	if closer, ok := reader.(io.Closer); ok {
+		defer closer.Close()
+	}
+	if fetchErr != nil {
+		mp.debugf("failed to get latest version: %s", fetchErr)
+		return event, false, fetchErr
 	}
 	if reader == nil {
 		if mp.printCheckUpdate {
 			mp.debugf("no updates")
 		}
 		mp.printCheckUpdate = false
-		return //fetcher has explicitly said there are no updates
+		return event, false, nil //no updates
 	}
 	mp.printCheckUpdate = true
 	mp.debugf("streaming update...")
-	//optional closer
-	if closer, ok := reader.(io.Closer); ok {
-		defer closer.Close()
+	if mp.isStopping() {
+		return event, false, ErrStopped
 	}
-	tmpBin, err := os.OpenFile(tmpBinPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0666)
+	tmpBin, err := os.CreateTemp(filepath.Dir(mp.binPath), ".overseer-upgrade-*"+extension())
 	if err != nil {
 		mp.warnf("failed to open temp binary: %s", err)
-		return
+		return event, false, err
 	}
+	tmpBinPath := tmpBin.Name()
 	defer func() {
 		tmpBin.Close()
 		os.Remove(tmpBinPath)
@@ -301,109 +420,129 @@ func (mp *master) fetch() {
 	_, err = io.Copy(tmpBin, reader)
 	if err != nil {
 		mp.warnf("failed to write temp binary: %s", err)
-		return
+		return event, false, err
+	}
+	if mp.isStopping() {
+		return event, false, ErrStopped
 	}
 	//compare hash
 	newHash := hash.Sum(nil)
+	event.ID = hex.EncodeToString(newHash)
 	mp.restartMux.Lock()
 	unchanged := bytes.Equal(mp.binHash, newHash)
 	mp.restartMux.Unlock()
 	if unchanged {
 		mp.debugf("hash match - skip")
-		return
+		return event, false, err
 	}
 	//copy permissions
 	if err := chmod(tmpBin, mp.binPerms); err != nil {
 		mp.warnf("failed to make temp binary executable: %s", err)
-		return
+		return event, false, err
 	}
 	if err := chown(tmpBin, uid, gid); err != nil {
 		mp.warnf("failed to change owner of binary: %s", err)
-		return
+		return event, false, err
 	}
 	if _, err := tmpBin.Stat(); err != nil {
 		mp.warnf("failed to stat temp binary: %s", err)
-		return
+		return event, false, err
 	}
 	tmpBin.Close()
 	if _, err := os.Stat(tmpBinPath); err != nil {
 		mp.warnf("failed to stat temp binary by path: %s", err)
-		return
+		return event, false, err
 	}
 	if mp.Config.PreUpgrade != nil {
 		if err := mp.Config.PreUpgrade(tmpBinPath); err != nil {
 			mp.warnf("user cancelled upgrade: %s", err)
-			return
+			return event, false, err
 		}
+	}
+	if mp.isStopping() {
+		return event, false, ErrStopped
 	}
 	//overseer sanity check, dont replace our good binary with a non-executable file
 	tokenIn := token()
-	cmd := exec.Command(tmpBinPath)
-	cmd.Env = append(os.Environ(), []string{envBinCheck + "=" + tokenIn}...)
+	checkTimeout := mp.SanityCheckTimeout
+	if checkTimeout <= 0 {
+		checkTimeout = defaultSanityCheckTimeout
+	}
+	parentCtx := mp.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	checkCtx, cancelCheck := context.WithTimeout(parentCtx, checkTimeout)
+	defer cancelCheck()
+	cmd := exec.CommandContext(checkCtx, tmpBinPath)
+	cmd.Env = append(os.Environ(), envBinCheck+"="+tokenIn, envBinCheckLegacy+"="+tokenIn)
 	cmd.Args = os.Args
-	returned := false
-	go func() {
-		time.Sleep(5 * time.Second)
-		if !returned {
-			mp.warnf("sanity check against fetched executable timed-out, check overseer is running")
-			if cmd.Process != nil {
-				cmd.Process.Kill()
-			}
-		}
-	}()
+	cmd.WaitDelay = time.Second
 	tokenOut, err := cmd.CombinedOutput()
-	returned = true
 	if err != nil {
 		mp.warnf("failed to run temp binary: %s (%s) output \"%s\"", err, tmpBinPath, tokenOut)
-		return
+		return event, false, err
 	}
 	if tokenIn != string(tokenOut) {
 		mp.warnf("sanity check failed")
-		return
+		return event, false, errors.New("candidate sanity check failed")
 	}
 	// Serialize candidate replacement with activation authorization.
 	mp.upgradeMux.Lock()
 	mp.restartMux.Lock()
-	restarting = mp.restarting
+	restarting := mp.restarting || mp.stopping
 	mp.restartMux.Unlock()
 	if restarting {
 		mp.upgradeMux.Unlock()
-		return
+		return event, false, errors.New("restart in progress")
 	}
 	release, err := mp.lockUpgrade()
 	if err != nil {
 		mp.upgradeMux.Unlock()
+		release()
 		mp.warnf("upgrade lock: %s", err)
-		return
+		return event, false, err
 	}
 	if mp.Config.AuthorizeUpgrade != nil {
 		if err := mp.Config.AuthorizeUpgrade(tmpBinPath); err != nil {
 			release()
 			mp.upgradeMux.Unlock()
 			mp.warnf("upgrade authorization deferred: %s", err)
-			return
+			return event, false, err
 		}
+	}
+	if mp.isStopping() {
+		release()
+		mp.upgradeMux.Unlock()
+		return event, false, ErrStopped
+	}
+	if err := mp.saveRollback(startup); err != nil {
+		release()
+		mp.upgradeMux.Unlock()
+		return event, false, err
 	}
 	if err := overwrite(mp.binPath, tmpBinPath); err != nil {
 		release()
 		mp.upgradeMux.Unlock()
 		mp.warnf("failed to overwrite binary: %s", err)
-		return
+		return event, false, err
 	}
 	//binHash is read by fork() and info() on other goroutines
 	mp.restartMux.Lock()
 	oldHash := mp.binHash
 	mp.binHash = newHash
-	mp.restartMux.Unlock()
-	release()
-	mp.upgradeMux.Unlock()
-	mp.infof("upgraded binary (%x -> %x)", oldHash[:12], newHash[:12])
-	//binary successfully replaced
-	if !mp.Config.NoRestartAfterFetch {
-		mp.tryRestart()
+	if startup {
+		mp.startupCandidate = true
+		mp.activationRelease = release
 	}
-	//and keep fetching...
-	return
+	mp.restartMux.Unlock()
+	event = mp.upgradeEvent(event.ID, UpgradeStaged, nil)
+	if !startup {
+		release()
+	}
+	mp.upgradeMux.Unlock()
+	mp.infof("upgraded binary (%x -> %x)", oldHash, newHash)
+	return event, true, nil
 }
 
 // tryRestart is the auto-restart path invoked from the fetch loop; it
@@ -422,6 +561,10 @@ func (mp *master) triggerRestart() {
 // backs the exported ForceNextRestart() function.
 func (mp *master) forceNextRestart() {
 	mp.restartMux.Lock()
+	if mp.stopping {
+		mp.restartMux.Unlock()
+		return
+	}
 	mp.forceNext = true
 	mp.restartMux.Unlock()
 	mp.debugf("force next restart requested")
@@ -429,24 +572,48 @@ func (mp *master) forceNextRestart() {
 
 // info backs the exported MasterInfo() function.
 func (mp *master) info() Info {
+	info, _ := mp.infoSnapshot()
+	return info
+}
+
+func (mp *master) infoSnapshot() (Info, UpgradeInfo) {
 	mp.restartMux.Lock()
 	defer mp.restartMux.Unlock()
+	if mp.disabled {
+		return Info{}, UpgradeInfo{}
+	}
+	staged := (mp.forkedHash != nil || mp.startupCandidate) && !bytes.Equal(mp.forkedHash, mp.binHash)
+	stagedID := ""
+	if staged {
+		stagedID = hex.EncodeToString(mp.binHash)
+	}
 	return Info{
 		IsMaster:       true,
-		UpgradeStaged:  mp.forkedHash != nil && !bytes.Equal(mp.forkedHash, mp.binHash),
+		UpgradeStaged:  staged,
 		RestartPending: mp.pendingRestart,
 		ForceRequested: mp.forceNext,
 		WorkerForks:    mp.workerID,
-	}
+	}, UpgradeInfo{ActiveID: hex.EncodeToString(mp.forkedHash), StagedID: stagedID}
 }
 
 // startRestart atomically claims ownership of the restart and, if claimed,
 // performs the graceful shutdown handshake. When checkShouldRestart is true
 // the caller is the fetch loop and ShouldRestart may defer the restart.
-func (mp *master) startRestart(checkShouldRestart bool) {
+func (mp *master) startRestart(checkShouldRestart bool) { mp.startRestartFor(nil, checkShouldRestart) }
+
+func (mp *master) startRestartFor(expected *exec.Cmd, checkShouldRestart bool) {
 	mp.upgradeMux.Lock()
+	if expected != nil {
+		mp.workerMux.Lock()
+		current := mp.workerCmd == expected
+		mp.workerMux.Unlock()
+		if !current {
+			mp.upgradeMux.Unlock()
+			return
+		}
+	}
 	mp.restartMux.Lock()
-	if mp.restarting {
+	if mp.restarting || mp.stopping {
 		mp.restartMux.Unlock()
 		mp.upgradeMux.Unlock()
 		return
@@ -489,15 +656,21 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 			return
 		}
 	}
+	// Call user policy without restartMux: it may inspect MasterInfo or set a
+	// force request. upgradeMux still serializes this approval with activation.
 	mp.restartMux.Lock()
-	if mp.restarting {
+	consult := checkShouldRestart && !mp.forceNext && mp.Config.ShouldRestart != nil
+	mp.restartMux.Unlock()
+	allow := !consult || mp.Config.ShouldRestart()
+	mp.restartMux.Lock()
+	if mp.restarting || mp.stopping {
 		mp.debugf("already graceful restarting")
 		mp.restartMux.Unlock()
 		release()
 		mp.upgradeMux.Unlock()
 		return
 	}
-	if checkShouldRestart && !mp.forceNext && mp.Config.ShouldRestart != nil && !mp.Config.ShouldRestart() {
+	if checkShouldRestart && !mp.forceNext && !allow {
 		if !mp.pendingRestart {
 			mp.debugf("restart deferred: ShouldRestart returned false")
 		}
@@ -513,7 +686,8 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	mp.pendingRestart = false
 	mp.forceNext = false
 	mp.workerMux.Lock()
-	hasWorker := mp.workerCmd != nil
+	workerCmd := mp.workerCmd
+	hasWorker := workerCmd != nil
 	mp.workerMux.Unlock()
 	if !hasWorker {
 		mp.debugf("no worker process")
@@ -523,6 +697,8 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 		return
 	}
 	mp.restarting = true
+	done := make(chan struct{})
+	mp.restartDone = done
 	mp.awaitingUSR1 = true
 	mp.signalledAt = time.Now()
 	// Keep the approved path protected while the old worker drains. fork takes
@@ -531,15 +707,17 @@ func (mp *master) startRestart(checkShouldRestart bool) {
 	mp.restartMux.Unlock()
 	mp.upgradeMux.Unlock()
 	mp.infof("graceful restart triggered")
-	mp.sendSignal(mp.Config.RestartSignal) //ask nicely to terminate
+	mp.sendSignalTo(workerCmd, mp.Config.RestartSignal) //ask nicely to terminate
 	select {
-	case <-mp.restarted:
+	case <-mp.done:
+		return
+	case <-done:
 		//success
 		mp.infof("restart success")
 	case <-time.After(mp.TerminateTimeout):
 		//times up mr. process, we did ask nicely!
 		mp.infof("graceful timeout (%s), forcing exit", mp.TerminateTimeout)
-		mp.sendSignal(os.Kill)
+		mp.sendSignalTo(workerCmd, os.Kill)
 	}
 }
 
@@ -558,8 +736,24 @@ func (mp *master) fork() error {
 	// Initial master startup instead trusts the explicitly started executable.
 	mp.upgradeMux.Lock()
 	mp.restartMux.Lock()
+	if mp.stopping {
+		var release func()
+		if !mp.startupCandidate {
+			release = mp.activationRelease
+			mp.activationRelease = nil
+		}
+		// Keep the lease for shutdown only while it has to restore a startup candidate.
+		mp.restartMux.Unlock()
+		if release != nil {
+			release()
+		}
+		mp.upgradeMux.Unlock()
+		return ErrStopped
+	}
 	release := mp.activationRelease
 	mp.activationRelease = nil
+	attempt := mp.restartDone
+	startupCandidate := mp.startupCandidate
 	mp.restartMux.Unlock()
 	if release == nil {
 		var err error
@@ -572,10 +766,67 @@ func (mp *master) fork() error {
 	}
 	unlock := func() { release(); mp.upgradeMux.Unlock() }
 	hash, err := binaryHash(mp.binPath)
-	if err != nil {
+	// Failure recovery stays inside the activation/installer critical section.
+	fail := func(cause error) error {
+		id := hex.EncodeToString(hash)
+		if id == "" {
+			mp.restartMux.Lock()
+			id = hex.EncodeToString(mp.binHash)
+			mp.restartMux.Unlock()
+		}
+		recovered := false
+		if mp.rollbackPath != "" {
+			if err := mp.restoreRollback(); err != nil {
+				cause = fmt.Errorf("%w; rollback failed: %v", cause, err)
+			} else {
+				recovered = true
+			}
+		}
+		if recovered {
+			// Retain the installer lease through the recovery fork as well. A
+			// cooperating installer must not replace the restored image between
+			// rollback and its acknowledged start.
+			mp.restartMux.Lock()
+			stopping := mp.stopping
+			if !stopping {
+				mp.activationRelease = release
+			}
+			mp.resetFetcher = true
+			mp.restartMux.Unlock()
+			event := mp.upgradeEvent(id, UpgradeRolledBack, cause)
+			if stopping {
+				release()
+			}
+			mp.upgradeMux.Unlock()
+			mp.dispatchUpgrade(event)
+			if stopping {
+				return cause
+			}
+			return nil
+		}
+		event := mp.upgradeEvent(id, UpgradeRejected, cause)
 		unlock()
-		return fmt.Errorf("worker executable hash: %w", err)
+		mp.dispatchUpgrade(event)
+		return cause
 	}
+	if err != nil {
+		return fail(fmt.Errorf("worker executable hash: %w", err))
+	}
+	// Initial startup normally trusts the executable explicitly launched by the
+	// user. An update installed during the startup window needs activation
+	// authorization too, under the same installer lease as cmd.Start.
+	if startupCandidate && mp.Config.AuthorizeUpgrade != nil {
+		if err := mp.Config.AuthorizeUpgrade(mp.binPath); err != nil {
+			return fail(fmt.Errorf("startup upgrade activation: %w", err))
+		}
+		if mp.isStopping() {
+			return fail(ErrStopped)
+		}
+	}
+	mp.restartMux.Lock()
+	mp.descriptorsReleased = make(chan bool, 1)
+	released := mp.descriptorsReleased
+	mp.restartMux.Unlock()
 	mp.infof("starting %s", mp.binPath)
 	cmd := exec.Command(mp.binPath)
 	//mark this new process as the "active" worker process.
@@ -630,20 +881,83 @@ func (mp *master) fork() error {
 	// pipe open forever; without WaitDelay, cmd.Wait blocks waiting for an
 	// EOF that never arrives, and the master never spawns the next worker.
 	cmd.WaitDelay = mp.Config.WaitDelay
-	//include socket files
-	cmd.ExtraFiles = mp.workerExtraFiles
-	if err := cmd.Start(); err != nil {
-		mp.workerMux.Lock()
+	// Set up platform-specific listener and control inheritance.
+	closeControl, err := mp.prepareWorker(cmd)
+	if err != nil {
+		return fail(err)
+	}
+	defer closeControl()
+	ready, closeReady, err := mp.prepareReady(cmd)
+	if err != nil {
+		return fail(err)
+	}
+	defer closeReady()
+	// exec.Cmd writes Process during Start; publish it under the same lock
+	// used by signal forwarding, including signals arriving during startup.
+	mp.workerMux.Lock()
+	startErr := cmd.Start()
+	if startErr != nil {
 		mp.workerCmd = nil
 		mp.pendingSignals = nil
 		mp.workerMux.Unlock()
-		unlock()
-		return fmt.Errorf("Failed to start worker process: %s", err)
+		return fail(fmt.Errorf("failed to start worker process: %w", startErr))
+	}
+	mp.workerMux.Unlock()
+	mp.workerStarted(cmd)
+	cmdwait := make(chan error, 1)
+	go func() { cmdwait <- cmd.Wait() }()
+	mp.restartMux.Lock()
+	stopping := mp.stopping
+	mp.restartMux.Unlock()
+	if stopping {
+		_ = cmd.Process.Kill()
+		<-cmdwait
+		return fail(errors.New("master stopped during worker startup"))
+	}
+	if ready != nil {
+		timer := time.NewTimer(mp.ReadyTimeout)
+		var readyErr error
+		exited := false
+		select {
+		case readyErr = <-ready:
+		case err := <-cmdwait:
+			readyErr = fmt.Errorf("worker exited before readiness: %v", err)
+			exited = true
+		case <-timer.C:
+			readyErr = fmt.Errorf("worker readiness timed out after %s", mp.ReadyTimeout)
+		}
+		timer.Stop()
+		if readyErr != nil {
+			if !exited {
+				_ = cmd.Process.Kill()
+				<-cmdwait
+			}
+			return fail(readyErr)
+		}
 	}
 	mp.restartMux.Lock()
-	mp.forkedHash = hash
+	stopping = mp.stopping
 	mp.restartMux.Unlock()
+	if stopping {
+		_ = cmd.Process.Kill()
+		<-cmdwait
+		return fail(errors.New("master stopped before worker readiness"))
+	}
+	mp.restartMux.Lock()
+	changed := !bytes.Equal(mp.forkedHash, hash)
+	mp.forkedHash = hash
+	mp.startupCandidate = false
+	mp.restartMux.Unlock()
+	mp.discardRollback()
+	mp.completeRestart(attempt)
+	var event UpgradeEvent
+	if changed {
+		event = mp.upgradeEvent(binID, UpgradeActivated, nil)
+	}
 	unlock()
+	if changed {
+		mp.dispatchUpgrade(event)
+	}
 	//drain any signals that arrived during the fork window
 	mp.workerMux.Lock()
 	pending := mp.pendingSignals
@@ -651,43 +965,17 @@ func (mp *master) fork() error {
 	mp.workerMux.Unlock()
 	for _, s := range pending {
 		mp.debugf("delivering queued signal (%s)", s)
-		if err := cmd.Process.Signal(s); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := mp.signalWorker(cmd.Process, s); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			mp.debugf("queued signal failed (%s)", err)
 		}
 	}
-	//was scheduled to restart, notify success
-	mp.restartMux.Lock()
-	wasRestarting := mp.restarting
-	if wasRestarting {
-		mp.restartedAt = time.Now()
-		mp.restarting = false
-	}
-	//any successful fork runs the on-disk binary, satisfying a force request
-	//latched while a restart was already in flight
-	mp.forceNext = false
-	mp.restartMux.Unlock()
-	if wasRestarting {
-		// Non-blocking: if startRestart already exited via TerminateTimeout,
-		// nobody is reading mp.restarted. A blocking send here would hang the
-		// master forever — the worker is already running, no further progress
-		// is needed. Drop the notification in that case. The channel is
-		// unbuffered and only one restart can be in-flight at a time
-		// (guarded by mp.restarting), so racing a real receiver is not
-		// possible: startRestart enters its select before this send can run
-		// (it kicks off the worker death we are responding to).
-		select {
-		case mp.restarted <- true:
-		default:
-		}
-	}
-	//convert wait into channel
-	cmdwait := make(chan error)
-	go func() {
-		cmdwait <- cmd.Wait()
-	}()
+	mp.startFetching()
 	//wait....
 	select {
 	case err := <-cmdwait:
+		mp.restartMux.Lock()
+		mp.awaitingUSR1 = false
+		mp.restartMux.Unlock()
 		//program exited before releasing descriptors
 		//proxy exit code out to master. Prefer ProcessState (always set
 		//after the process exits) over the returned error, which may be
@@ -739,10 +1027,13 @@ func (mp *master) fork() error {
 		mp.restartMux.Lock()
 		restarting := mp.restarting
 		mp.restartMux.Unlock()
-		if mp.NoRestart || !restarting {
+		mp.restartMux.Lock()
+		stopping := mp.stopping
+		mp.restartMux.Unlock()
+		if mp.NoRestart || !restarting || stopping {
 			os.Exit(code)
 		}
-	case <-mp.descriptorsReleased:
+	case <-released:
 		//if descriptors are released, the program
 		//has yielded control of its sockets and
 		//a parallel instance of the program can be
@@ -810,4 +1101,18 @@ func binaryHash(path string) ([]byte, error) {
 		return nil, err
 	}
 	return h.Sum(nil), nil
+}
+
+func (mp *master) completeRestart(attempt chan struct{}) {
+	mp.restartMux.Lock()
+	defer mp.restartMux.Unlock()
+	if mp.restarting && attempt != nil && mp.restartDone == attempt {
+		mp.restartedAt = time.Now()
+		mp.restarting = false
+		if mp.restartDone != nil {
+			close(mp.restartDone)
+			mp.restartDone = nil
+		}
+	}
+	mp.forceNext = false
 }

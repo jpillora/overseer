@@ -3,13 +3,13 @@ package overseer
 import (
 	"bytes"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -114,5 +114,8 @@ func killGrandchildByStdout(stdout *syncBuffer) {
 	if err != nil || pid <= 1 {
 		return
 	}
-	_ = syscall.Kill(pid, syscall.SIGKILL)
+	if process, err := os.FindProcess(pid); err == nil {
+		_ = process.Kill()
+		_ = process.Release()
+	}
 }

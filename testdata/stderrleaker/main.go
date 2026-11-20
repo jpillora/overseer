@@ -1,12 +1,10 @@
 // A tiny helper binary used by waitdelay_integration_test.go.
 // It spawns a long-running grandchild that inherits its stderr,
-// then exits cleanly. Mirrors the rais vscode case where a
-// subprocess outlives the worker but keeps the worker→master
+// then exits cleanly. The subprocess outlives the worker
+// but keeps the worker-to-master
 // pipe write-end open.
 //
-// The grandchild is `sh -c "echo <pid>; exec sleep 60"`: it prints
-// its own PID to stdout so the test can target it precisely for
-// cleanup instead of pkill'ing every sleep on the box.
+// The grandchild prints its PID so cleanup can target only this helper.
 package main
 
 import (
@@ -17,7 +15,16 @@ import (
 )
 
 func main() {
-	sh := exec.Command("sh", "-c", "echo $$; exec sleep 60")
+	if len(os.Args) > 1 && os.Args[1] == "grandchild" {
+		fmt.Println(os.Getpid())
+		time.Sleep(time.Minute)
+		return
+	}
+	path, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	sh := exec.Command(path, "grandchild")
 	sh.Stdin = os.Stdin
 	sh.Stdout = os.Stdout
 	sh.Stderr = os.Stderr

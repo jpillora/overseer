@@ -1,7 +1,7 @@
 package fetcher
 
 import (
-	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,9 +17,12 @@ type HTTP struct {
 	URL          string
 	Interval     time.Duration
 	CheckHeaders []string
+	// Timeout bounds each complete request, including the body. Defaults to five minutes.
+	Timeout time.Duration
 	//internal state
-	delay bool
-	lasts map[string]string
+	delay    bool
+	lasts    map[string]string
+	previous map[string]string
 }
 
 // if any of these change, the binary has been updated
@@ -32,6 +35,9 @@ func (h *HTTP) Init() error {
 		return fmt.Errorf("URL required")
 	}
 	h.lasts = map[string]string{}
+	if h.Timeout <= 0 {
+		h.Timeout = 5 * time.Minute
+	}
 	if h.Interval == 0 {
 		h.Interval = 5 * time.Minute
 	}
@@ -43,15 +49,31 @@ func (h *HTTP) Init() error {
 
 // Fetch the binary from the provided URL
 func (h *HTTP) Fetch() (io.Reader, error) {
+	return h.FetchContext(context.Background())
+}
+
+// FetchContext is Fetch with cancelable polling and HTTP requests.
+func (h *HTTP) FetchContext(ctx context.Context) (io.Reader, error) {
+	h.previous = make(map[string]string, len(h.lasts))
+	for k, v := range h.lasts {
+		h.previous[k] = v
+	}
 	//delay fetches after first
 	if h.delay {
-		time.Sleep(h.Interval)
+		if err := wait(ctx, h.Interval); err != nil {
+			return nil, err
+		}
 	}
 	h.delay = true
+	client := &http.Client{Timeout: h.Timeout}
 	//status check using HEAD
-	resp, err := http.Head(h.URL)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", h.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("HEAD request failed (%s)", err)
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HEAD request failed (%w)", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -68,21 +90,30 @@ func (h *HTTP) Fetch() (io.Reader, error) {
 			total++
 		}
 	}
-	if matches == total {
+	if total > 0 && matches == total {
 		return nil, nil //skip, file match
 	}
 	//binary fetch using GET
-	resp, err = http.Get(h.URL)
+	req, err = http.NewRequestWithContext(ctx, "GET", h.URL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("GET request failed (%s)", err)
+		return nil, err
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET request failed (%w)", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("GET request failed (status code %d)", resp.StatusCode)
 	}
-	//extract gz files
-	if strings.HasSuffix(h.URL, ".gz") && resp.Header.Get("Content-Encoding") != "gzip" {
-		return gzip.NewReader(resp.Body)
-	}
-	//success!
-	return resp.Body, nil
+	return responseReader(resp, strings.HasSuffix(h.URL, ".gz"))
 }
+
+func (h *HTTP) FetchResult(err error) {
+	if err != nil && h.previous != nil {
+		h.lasts = h.previous
+	}
+	h.previous = nil
+}
+
+func (h *HTTP) Reset() { h.lasts = map[string]string{} }

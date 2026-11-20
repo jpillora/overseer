@@ -12,7 +12,7 @@ Commonly, graceful restarts are performed by the active process (*dark blue*) cl
 
 * Simple
 * Works with process managers (systemd, upstart, supervisor, etc)
-* Graceful, zero-down time restarts
+* Graceful restarts (zero downtime with inherited listeners on Unix; a brief listener gap on Windows)
 * Easy self-upgrading binaries
 
 ### Install
@@ -74,6 +74,71 @@ func prog(state overseer.State) {
 * Except for scheduled restarts, the active child process exiting will cause the main process to exit with the same code. So, **`overseer` is not a process manager**.
 
 See [Config](https://godoc.org/github.com/jpillora/overseer#Config)uration options [here](https://godoc.org/github.com/jpillora/overseer#Config) and the runtime [State](https://godoc.org/github.com/jpillora/overseer#State) available to your program [here](https://godoc.org/github.com/jpillora/overseer#State).
+
+### Startup update window
+
+By default, overseer gives the initial update check one second to return a
+binary reader **before starting the first worker**. Configure that window with:
+
+```go
+options := overseer.Options{StartupFetchTimeout: time.Second} // zero also uses one second
+// options.StartupFetchTimeout = -1 // check in the background after worker startup
+overseer.RunWithOptions(cfg, options)
+```
+
+No update or a fetch error starts the installed application immediately. If no
+reader arrives before the timeout (including fetcher initialization), overseer
+cancels that attempt and starts the installed application. A late reader is
+closed and discarded, so it cannot trigger an immediate restart. Normal polling
+resumes after worker startup, using the fetcher's usual interval.
+
+If a reader arrives in time, overseer finishes downloading, validating, and
+installing it before starting the first worker. Those steps may exceed the
+startup window; fetcher request timeouts and `SanityCheckTimeout` still apply.
+The original executable is retained until activation succeeds, including the
+readiness acknowledgement when enabled, so a failed startup candidate can recover.
+One installer lease covers installation, activation, and any rollback. If the
+master stops before activation, it restores the original before releasing the lease.
+`ShouldRestart` and `NoRestartAfterFetch` govern restarts of running workers;
+the startup check selects which binary starts first.
+
+Built-in fetchers implement the optional `fetcher.ContextFetcher` interface for
+cancelable checks. Existing custom fetchers still work: a stalled `Init` or
+`Fetch` cannot extend the startup window, but it can stall subsequent checks.
+Fetches and result/reset callbacks remain serialized on one fetching goroutine.
+This window does not impose a minimum worker uptime; later updates follow the
+existing automatic restart policy.
+
+### Readiness and upgrade outcomes
+
+To acknowledge that an upgrade has initialized successfully and recover if it
+fails, enable readiness:
+
+```go
+options := overseer.Options{ReadyTimeout: 30 * time.Second}
+options.OnUpgrade = func(event overseer.UpgradeEvent) {
+    log.Printf("upgrade %d %s: %s (%v)", event.Sequence, event.ID, event.Status, event.Err)
+}
+overseer.RunWithOptions(cfg, options)
+```
+
+Call `state.Ready()` from `Program` after its listeners and resources are ready.
+Every candidate must support this call. A failed start, early exit, or readiness
+timeout restores the last acknowledged executable and starts it again. Without
+`ReadyTimeout`, activation continues to mean only that the process started.
+Downloading or staging does not acknowledge a working upgrade. Use activation
+events and `MasterUpgradeInfo().ActiveID` to track successful installation; concurrent
+callbacks carry ordered sequence numbers.
+
+On Linux and macOS, an existing master can run a new worker using the same
+listener descriptors and restart signals. The running master retains its old
+code and configuration until a normal process restart. Workers retain the
+historical `OVERSEER_IS_WORKER`, `OVERSEER_IS_SLAVE`, ID, and path variables;
+`State.Enabled` is available to callers that receive a `State`.
+
+See [Windows upgrades](WINDOWS.md) for the lifecycle contract, fetcher retry and
+timeout behavior, compatibility, user experience, recovery limits, and standalone
+verification. These lifecycle APIs work on Unix as well as Windows.
 
 ### More examples
 
